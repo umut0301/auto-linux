@@ -25,7 +25,6 @@ NC='\033[0m'
 WG_DIR="/etc/wireguard"
 WG_CONF="${WG_DIR}/wg0.conf"
 CLIENT_DIR="${WG_DIR}/clients"
-SYSCTL_FILE="/etc/sysctl.conf"
 
 # 日志函数
 log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
@@ -70,18 +69,22 @@ show_wg_header() {
     echo ""
 }
 
-# 发行版检测（来自 wireguard-manager.sh）
-detect_distro() {
-    if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        DISTRO=$ID
-        VERSION=$VERSION_ID
-    elif [ -f /etc/redhat-release ]; then
-        DISTRO="rhel"
-    elif [ -f /etc/debian_version ]; then
-        DISTRO="debian"
+# 包管理器检测（尽量适配多发行版）
+detect_pkg_manager() {
+    if command -v apt-get &>/dev/null; then
+        PKG_MANAGER="apt"
+    elif command -v dnf &>/dev/null; then
+        PKG_MANAGER="dnf"
+    elif command -v yum &>/dev/null; then
+        PKG_MANAGER="yum"
+    elif command -v pacman &>/dev/null; then
+        PKG_MANAGER="pacman"
+    elif command -v zypper &>/dev/null; then
+        PKG_MANAGER="zypper"
+    elif command -v apk &>/dev/null; then
+        PKG_MANAGER="apk"
     else
-        log_error "无法检测Linux发行版"
+        log_error "无法检测可用的包管理器"
         return 1
     fi
     return 0
@@ -103,9 +106,64 @@ get_default_iface() {
     ip route | grep default | awk '{print $5}' | head -n 1
 }
 
-# 随机端口生成（来自 wg-1-install.sh）
-random_port() {
-    echo $(( ( RANDOM % 10000 ) + 20000 ))
+install_packages() {
+    local packages=("$@")
+
+    case $PKG_MANAGER in
+        apt)
+            apt-get update
+            apt-get install -y "${packages[@]}"
+            ;;
+        dnf)
+            dnf install -y "${packages[@]}"
+            ;;
+        yum)
+            yum install -y "${packages[@]}"
+            ;;
+        pacman)
+            pacman -S --noconfirm "${packages[@]}"
+            ;;
+        zypper)
+            zypper --non-interactive install "${packages[@]}"
+            ;;
+        apk)
+            apk add --no-cache "${packages[@]}"
+            ;;
+        *)
+            log_error "不支持的包管理器: $PKG_MANAGER"
+            return 1
+            ;;
+    esac
+}
+
+remove_packages() {
+    local packages=("$@")
+
+    case $PKG_MANAGER in
+        apt)
+            apt-get remove -y "${packages[@]}"
+            apt-get autoremove -y
+            ;;
+        dnf)
+            dnf remove -y "${packages[@]}"
+            ;;
+        yum)
+            yum remove -y "${packages[@]}"
+            ;;
+        pacman)
+            pacman -R --noconfirm "${packages[@]}"
+            ;;
+        zypper)
+            zypper --non-interactive remove "${packages[@]}"
+            ;;
+        apk)
+            apk del "${packages[@]}"
+            ;;
+        *)
+            log_warn "不支持的包管理器: $PKG_MANAGER"
+            return 1
+            ;;
+    esac
 }
 
 # ===== WireGuard 安装与优化 =====
@@ -113,33 +171,23 @@ install_wireguard() {
     show_wg_header
     log_info "开始安装WireGuard..."
 
-    if ! detect_distro; then
+    if ! detect_pkg_manager; then
         press_any_key
         return 1
     fi
 
-    case $DISTRO in
-        ubuntu|debian)
+    log_info "检测到包管理器: $PKG_MANAGER"
+    case $PKG_MANAGER in
+        apt)
             log_info "使用apt安装WireGuard..."
-            apt-get update
-            apt-get install -y wireguard wireguard-tools qrencode
+            install_packages wireguard wireguard-tools qrencode
             ;;
-        centos|rhel|fedora)
-            log_info "使用yum/dnf安装WireGuard..."
-            if command -v dnf &> /dev/null; then
-                dnf install -y epel-release
-                dnf install -y wireguard-tools qrencode
-            else
-                yum install -y epel-release
-                yum install -y wireguard-tools qrencode
-            fi
-            ;;
-        arch|manjaro)
-            log_info "使用pacman安装WireGuard..."
-            pacman -S --noconfirm wireguard-tools qrencode
+        dnf|yum|pacman|zypper|apk)
+            log_info "使用${PKG_MANAGER}安装WireGuard..."
+            install_packages wireguard-tools qrencode
             ;;
         *)
-            log_error "不支持的Linux发行版: $DISTRO"
+            log_error "不支持的包管理器: $PKG_MANAGER"
             log_info "请手动安装WireGuard: https://www.wireguard.com/install/"
             press_any_key
             return 1
@@ -679,10 +727,6 @@ setup_server() {
 
     if ! command -v wg &> /dev/null; then
         log_warn "WireGuard未安装，正在安装..."
-        if ! detect_distro; then
-            press_any_key
-            return 1
-        fi
         install_wireguard
         return 0
     fi
@@ -1282,21 +1326,13 @@ uninstall_wireguard() {
 
     read -p "是否卸载WireGuard软件包？(y/N): " uninstall_pkg
     if [ "$uninstall_pkg" = "y" ] || [ "$uninstall_pkg" = "Y" ]; then
-        if detect_distro; then
-            case $DISTRO in
-                ubuntu|debian)
-                    apt-get remove -y wireguard wireguard-tools qrencode 2>/dev/null
-                    apt-get autoremove -y 2>/dev/null
+        if detect_pkg_manager; then
+            case $PKG_MANAGER in
+                apt)
+                    remove_packages wireguard wireguard-tools qrencode 2>/dev/null
                     ;;
-                centos|rhel|fedora)
-                    if command -v dnf &> /dev/null; then
-                        dnf remove -y wireguard-tools qrencode 2>/dev/null
-                    else
-                        yum remove -y wireguard-tools qrencode 2>/dev/null
-                    fi
-                    ;;
-                arch|manjaro)
-                    pacman -R --noconfirm wireguard-tools qrencode 2>/dev/null
+                dnf|yum|pacman|zypper|apk)
+                    remove_packages wireguard-tools qrencode 2>/dev/null
                     ;;
             esac
         fi
