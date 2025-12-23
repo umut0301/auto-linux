@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
 #
 # auto-linux.sh
-# WireGuard 一键管理脚本
-# 说明：自动适配主流发行版，提供交互式菜单，支持安装、配置、添加客户端、生成二维码、查看/删除客户端等功能
-# 作者：整合自 repo 脚本（由 ChatGPT 整合与优化）
+# WireGuard 一键管理脚本（增强版：接口/端口可随机、C 段输入、检测现有接口）
 #
 set -euo pipefail
 IFS=$'\n\t'
@@ -120,7 +118,6 @@ ensure_wireguard_tools() {
             pkg_install wireguard qrencode iptables-persistent net-tools resolvconf
             ;;
         centos|rhel|almalinux|rocky)
-            # EPEL may be required on older RHEL/CentOS
             if ! rpm -qa | grep -qi epel; then
                 dnf install -y epel-release || true
             fi
@@ -136,7 +133,6 @@ ensure_wireguard_tools() {
             pkg_install wireguard-tools qrencode
             ;;
         *)
-            # fallback
             pkg_install wireguard qrencode || true
             ;;
     esac
@@ -191,21 +187,27 @@ wg_next_client_ip() {
     return 1
 }
 
+# 改进的添加客户端（保留此前增强）
 wg_add_client() {
-    local name="$1"; shift
+    local name="$1"; shift || true
     local iface="${1:-wg0}"
     local ipaddr
+
     if [[ -z "$name" ]]; then
         read -rp "请输入客户端名称（仅字母数字_-）: " name
         if [[ -z "$name" ]]; then err "客户端名不能为空"; return 1; fi
     fi
+
     if [[ ! -f "$WG_DIR/${iface}.conf" ]]; then
         err "未找到服务端配置：$WG_DIR/${iface}.conf，请先部署服务端。"
         return 1
     fi
+
     mkdir -p "$WG_CLIENT_DIR/$name"
     chmod 700 "$WG_CLIENT_DIR/$name"
-    ipaddr=$(wg_next_client_ip "$iface")
+
+    ipaddr=$(wg_next_client_ip "$iface") || return 1
+
     # generate keys
     umask 077
     wg genkey | tee "$WG_CLIENT_DIR/$name/private.key" | wg pubkey > "$WG_CLIENT_DIR/$name/public.key"
@@ -216,8 +218,9 @@ wg_add_client() {
     psk=$(cat "$WG_CLIENT_DIR/$name/psk")
     server_pub=$(cat "$WG_DIR/server_public.key" 2>/dev/null || true)
     # server endpoint: prefer public IP detection
-    server_addr=$(curl -fs4 https://ipv4.icanhazip.com 2>/dev/null || hostname -I | awk '{print $1}')
+    server_addr=$(curl -fs4 https://ipv4.icanhazip.com 2>/dev/null || hostname -I | awk '{print $1}' || true)
     server_port=$(grep -E 'ListenPort' "$WG_DIR/${iface}.conf" 2>/dev/null | awk -F'=' '{print $2}' | tr -d ' ')
+    server_port=${server_port:-51820}
     dns="1.1.1.1"
     cat > "$WG_CLIENT_DIR/$name/$name.conf" <<EOF
 [Interface]
@@ -232,23 +235,23 @@ Endpoint = ${server_addr}:${server_port}
 AllowedIPs = 0.0.0.0/0, ::/0
 PersistentKeepalive = 21
 EOF
-    # append peer to server config
-    cat >> "$WG_DIR/${iface}.conf" <<EOF
+    # append peer safely
+    {
+      printf "\n# %s\n[Peer]\nPublicKey = %s\nPresharedKey = %s\nAllowedIPs = %s/32\n" "$name" "$pub" "$psk" "$ipaddr"
+    } >> "$WG_DIR/${iface}.conf"
 
-# ${name}
-[Peer]
-PublicKey = ${pub}
-PresharedKey = ${psk}
-AllowedIPs = ${ipaddr}/32
-EOF
     chmod 600 "$WG_CLIENT_DIR/$name/$name.conf"
     # generate qr (png + terminal)
     if command -v qrencode >/dev/null 2>&1; then
         qrencode -o "$WG_CLIENT_DIR/$name/$name.png" -t png < "$WG_CLIENT_DIR/$name/$name.conf" || true
     fi
     log "已添加客户端 ${name}，配置: $WG_CLIENT_DIR/$name/$name.conf"
-    # restart service to apply
-    systemctl restart "wg-quick@${iface}" 2>/dev/null || wg syncconf "$iface" <(wg-quick strip "$iface") 2>/dev/null || true
+    # restart service to apply (容错)
+    if systemctl is-active --quiet "wg-quick@${iface}" 2>/dev/null; then
+        systemctl restart "wg-quick@${iface}" 2>/dev/null || wg syncconf "$iface" <(wg-quick strip "$iface") 2>/dev/null || true
+    else
+        wg-quick up "$iface" 2>/dev/null || true
+    fi
 }
 
 wg_list_clients() {
@@ -265,7 +268,7 @@ wg_list_clients() {
 }
 
 wg_show_client() {
-    local name="$1"; shift
+    local name="$1"; shift || true
     if [[ -z "$name" ]]; then
         read -rp "请输入要查看的客户端名: " name
     fi
@@ -283,24 +286,33 @@ wg_show_client() {
 }
 
 wg_remove_client() {
-    local name="$1"; shift
+    local name="$1"; shift || true
     if [[ -z "$name" ]]; then
         read -rp "请输入要删除的客户端名: " name
     fi
     local iface="${1:-wg0}"
     local server_conf="$WG_DIR/${iface}.conf"
-    if [[ ! -f "$server_conf" ]]; then err "未找到服务器配置 $server_conf"; fi
+    if [[ ! -f "$server_conf" ]]; then err "未找到服务器配置 $server_conf"; return 1; fi
     local pub
     pub=$(cat "$WG_CLIENT_DIR/$name/public.key" 2>/dev/null || true)
     if [[ -z "$pub" ]]; then
         warn "未找到客户端公钥，仍会尝试删除本地文件"
     else
-        # remove peer block by matching public key or comment
-        sed -i "/# ${name}/,/\[Peer\]/{/^\s*$/!b};" "$server_conf" 2>/dev/null || true
-        # safer remove: remove the comment and following peer (4 lines)
-        sed -i "/# ${name}/,+4d" "$server_conf" 2>/dev/null || true
-        # also try removing by public key
-        sed -i "/${pub}/, +3d" "$server_conf" 2>/dev/null || true
+        # remove peer block by matching "# name" comment and the following peer block
+        if grep -q -F "# ${name}" "$server_conf"; then
+            awk -v marker="# ${name}" '
+            BEGIN {skip=0}
+            {
+              if ($0 ~ marker) { skip=1; next }
+              if (skip==1 && $0 ~ /^\s*$/) { skip=0; next }
+              if (skip==0) print $0
+            }
+            ' "$server_conf" > "${server_conf}.tmp" && mv "${server_conf}.tmp" "$server_conf" || true
+        fi
+        # fallback remove by public key (best-effort)
+        if [[ -n "$pub" ]]; then
+            sed -i "/${pub//\//\\\//}/,+3d" "$server_conf" 2>/dev/null || true
+        fi
     fi
     rm -rf "$WG_CLIENT_DIR/$name"
     systemctl restart "wg-quick@${iface}" 2>/dev/null || true
@@ -329,12 +341,19 @@ wg_enable_nat_and_forward() {
     local pub_if
     pub_if=$(ip route | awk '/default/ {print $5; exit}')
     if [[ -z "$pub_if" ]]; then warn "未能自动检测公网接口，请手动配置 NAT"; return; fi
-    iptables -t nat -C POSTROUTING -s "$(grep -m1 '^Address' "$WG_DIR/${iface}.conf" 2>/dev/null | awk -F'=' '{print $2}' | tr -d ' ' | cut -d'/' -f1 | awk -F'.' '{print $1"."$2"."$3".0/24"}')" -o "$pub_if" -j MASQUERADE 2>/dev/null || \
-        iptables -t nat -A POSTROUTING -s "$(grep -m1 '^Address' "$WG_DIR/${iface}.conf" 2>/dev/null | awk -F'=' '{print $2}' | tr -d ' ' | cut -d'/' -f1 | awk -F'.' '{print $1"."$2"."$3".0/24"}')" -o "$pub_if" -j MASQUERADE
-    # allow forwarding
+    # derive net cidr from server Address
+    local net_cidr
+    local baseip
+    baseip=$(grep -m1 '^Address' "$WG_DIR/${iface}.conf" 2>/dev/null | awk -F'=' '{print $2}' | tr -d ' ' | cut -d'/' -f1)
+    if [[ -z "$baseip" ]]; then baseip="10.0.0.1"; fi
+    net_cidr=$(echo "$baseip" | awk -F'.' '{print $1"."$2"."$3".0/24"}')
+
+    if ! iptables -t nat -C POSTROUTING -s "$net_cidr" -o "$pub_if" -j MASQUERADE 2>/dev/null; then
+        iptables -t nat -A POSTROUTING -s "$net_cidr" -o "$pub_if" -j MASQUERADE
+    fi
     iptables -C FORWARD -i "$iface" -o "$pub_if" -j ACCEPT 2>/dev/null || iptables -A FORWARD -i "$iface" -o "$pub_if" -j ACCEPT
     iptables -C FORWARD -i "$pub_if" -o "$iface" -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || iptables -A FORWARD -i "$pub_if" -o "$iface" -m state --state ESTABLISHED,RELATED -j ACCEPT
-    # save rules if possible
+
     if command -v netfilter-persistent >/dev/null 2>&1; then
         netfilter-persistent save >/dev/null 2>&1 || true
     elif [[ -d /etc/iptables ]]; then
@@ -368,6 +387,63 @@ wg_uninstall() {
         fi
     else
         log "取消卸载"
+    fi
+}
+
+# -----------------------
+# detect existing wg interfaces helper
+# -----------------------
+select_existing_wg_iface() {
+    # builds a list of interfaces from /etc/wireguard/*.conf and active systemctl wg-quick@*.service
+    local -a ifaces=()
+    if [[ -d "$WG_DIR" ]]; then
+        for f in "$WG_DIR"/*.conf; do
+            [[ -f "$f" ]] || continue
+            ifaces+=("$(basename "$f" .conf)")
+        done
+    fi
+    # also gather from systemctl (wg-quick@iface.service)
+    if command -v systemctl >/dev/null 2>&1; then
+        while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            # extract interface between '@' and '.service'
+            ifname=$(echo "$line" | awk -F'[@.]' '{print $2}')
+            [[ -z "$ifname" ]] && continue
+            # include if not already present
+            skip=0
+            for e in "${ifaces[@]}"; do [[ "$e" == "$ifname" ]] && skip=1 && break; done
+            [[ $skip -eq 0 ]] && ifaces+=("$ifname")
+        done < <(systemctl list-units --type=service --all 'wg-quick@*' --no-legend --no-pager 2>/dev/null | awk '{print $1}')
+    fi
+
+    if [[ ${#ifaces[@]} -eq 0 ]]; then
+        return 1
+    elif [[ ${#ifaces[@]} -eq 1 ]]; then
+        printf '%s' "${ifaces[0]}"
+        return 0
+    else
+        echo "检测到以下 WireGuard 接口："
+        local i=1
+        for it in "${ifaces[@]}"; do
+            echo "  $i) $it"
+            ((i++))
+        done
+        echo "  0) 取消"
+        read -rp "请选择要操作的接口编号: " sel
+        if ! [[ "$sel" =~ ^[0-9]+$ ]]; then
+            warn "无效选择"
+            return 1
+        fi
+        if [[ "$sel" -eq 0 ]]; then
+            return 1
+        fi
+        if (( sel >= 1 && sel <= ${#ifaces[@]} )); then
+            printf '%s' "${ifaces[sel-1]}"
+            return 0
+        else
+            warn "编号不在范围内"
+            return 1
+        fi
     fi
 }
 
@@ -415,17 +491,65 @@ EOF
         case "$c" in
             1)
                 require_root
-                read -rp "接口名 [wg0]: " iface; iface=${iface:-wg0}
-                read -rp "服务器内网IP [10.0.0.1]: " serverip; serverip=${serverip:-10.0.0.1}
-                read -rp "端口 [51820]: " port; port=${port:-51820}
+                # 接口名：可以输入，也可以回车随机生成
+                read -rp "接口名 [回车随机生成，例如 wgXXXX]: " iface
+                if [[ -z "$iface" ]]; then
+                    # 生成 wg + 4 随机数字
+                    iface="wg$(tr -dc '0-9' </dev/urandom | head -c4)"
+                    log "已随机生成接口名: $iface"
+                fi
+                # C 段输入：支持输入 x.x.x 或 完整 IP (x.x.x.1)
+                read -rp "请输入服务器 C 段（例如 10.8.0），或直接输入完整 IP（例如 10.8.0.1）。回车使用默认 10.0.0: " seg
+                if [[ -z "$seg" ]]; then
+                    seg="10.0.0"
+                    serverip="${seg}.1"
+                else
+                    # 如果用户输入完整 IP（含 4 段），直接使用；如果是 3 段则补 .1
+                    if [[ "$seg" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+                        serverip="$seg"
+                    elif [[ "$seg" =~ ^([0-9]{1,3}\.){2}[0-9]{1,3}$ ]]; then
+                        serverip="${seg}.1"
+                    else
+                        warn "无法解析输入，使用默认 10.0.0.1"
+                        serverip="10.0.0.1"
+                    fi
+                fi
+                # 端口：输入 port，回车或输入 random 则随机
+                read -rp "监听端口（输入具体数字或回车/输入 random 随机选择）： " port_input
+                if [[ -z "$port_input" || "$port_input" == "random" ]]; then
+                    # 选择一个 1025-65535 之间的随机端口（可能与已有服务冲突，用户需确认）
+                    port=$(shuf -i 1025-65535 -n 1 2>/dev/null || echo $((RANDOM%64511+1025)))
+                    log "已随机选择端口: $port"
+                else
+                    if ! [[ "$port_input" =~ ^[0-9]+$ ]] || (( port_input < 1 || port_input > 65535 )); then
+                        warn "端口不合法，使用默认 51820"
+                        port=51820
+                    else
+                        port="$port_input"
+                    fi
+                fi
+
                 ensure_wireguard_tools
                 wg_create_server_conf "$iface" "$serverip" "$port"
                 systemctl enable "wg-quick@${iface}" >/dev/null 2>&1 || true
                 systemctl restart "wg-quick@${iface}" >/dev/null 2>&1 || true
-                log "WireGuard 服务已安装并启动（接口: $iface）"
+                log "WireGuard 服务已安装并启动（接口: $iface，地址: ${serverip}/24，端口: $port）"
                 press_any_key
                 ;;
-            2) require_root; read -rp "客户端名: " name; name=${name:-client}; read -rp "接口名 [wg0]: " iface; iface=${iface:-wg0}; wg_add_client "$name" "$iface"; press_any_key ;;
+            2)
+                require_root
+                # 自动列出可用接口供选择
+                selected_iface=$(select_existing_wg_iface) || true
+                if [[ -z "$selected_iface" ]]; then
+                    warn "未检测到可用的 WireGuard 接口，请先在 菜单 1 中安装/初始化 服务端。"
+                    press_any_key
+                else
+                    read -rp "客户端名（回车使用 client）: " name
+                    name=${name:-client}
+                    wg_add_client "$name" "$selected_iface"
+                    press_any_key
+                fi
+                ;;
             3) wg_list_clients; press_any_key ;;
             4) wg_show_client; press_any_key ;;
             5) require_root; read -rp "客户端名: " name; read -rp "接口名 [wg0]: " iface; iface=${iface:-wg0}; wg_remove_client "$name" "$iface"; press_any_key ;;
