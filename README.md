@@ -11,6 +11,10 @@
 ```bash
 sudo bash auto-linux.sh
 ```
+##一键脚本
+一键脚本：
+```bash
+bash <(wget -qO- https://raw.githubusercontent.com/umut0301/auto-linux/refs/heads/main/auto-linux.sh)
 
 ## 说明
 - x-ui 功能入口会调用官方脚本：`https://github.com/yonggekkk/x-ui-yg`
