@@ -1,34 +1,34 @@
 # auto-linux
 
-自动化 Linux 管理脚本，当前聚焦 WireGuard 与 x-ui 面板管理，目标是方便 VPS 的快速部署与日常管理。
+自动化 Linux 管理脚本，提供 WireGuard 服务端/客户端一体化管理与交互式菜单，适合 VPS 快速部署与日常维护。
 
 ## 功能概览
 
-- WireGuard
-  - 安装/初始化服务端（自动生成密钥与配置文件）
+- WireGuard 管理
+  - 初始化/安装服务端（自动生成密钥与配置）
   - 添加 / 查看 / 删除 客户端
-  - 生成客户端配置文件与二维码（终端渲染 + PNG 文件）
-  - 配置 NAT 与 IP 转发（自动检测公网接口并添加 iptables 规则）
-  - 修改监听端口、查看状态、卸载
-- x-ui 面板
-  - 使用官方脚本进行安装与管理（通过脚本内菜单调用）
-- 系统信息与环境检查
-  - 发行版信息、内核版本、公网 IP、磁盘占用等
-- 交互式菜单
-  - 提供交互式菜单，按提示执行对应的安装 / 管理 / 卸载 操作
+  - 生成客户端配置文件与二维码（PNG 文件）
+  - 自动选择可用客户端 IP
+  - 修改监听端口、查看状态、配置 NAT 与转发
+  - 卸载并清理 WireGuard 配置
 
 ## 脚本来源与说明
 
 脚本路径：`auto-linux.sh`
 
-该脚本为交互式 Bash 脚本，自动适配主流发行版（Debian/Ubuntu、CentOS/RHEL、Fedora、Arch、openSUSE 等），并封装了常见的包管理命令（apt/dnf/pacman/zypper）。
+该脚本为交互式 Bash 工具，内置菜单并自动适配主流发行版的包管理命令。
 
 主要功能实现文件和目录（运行脚本后会创建）：
 
 - /etc/wireguard/  — WireGuard 相关配置
 - /etc/wireguard/clients/ — 每个客户端的密钥与配置目录
 
-注意：脚本会在运行时尝试安装 `wireguard`/`wireguard-tools`、`qrencode` 等工具，方便生成二维码与管理。
+注意：脚本会根据发行版自动安装依赖（`wireguard`/`wireguard-tools`、`qrencode` 等）。
+
+## 使用前提
+
+- 需要 root 权限运行。
+- 客户端名只允许 `[A-Za-z0-9._-]` 字符。
 
 ## 快速使用（交互式）
 
@@ -37,7 +37,7 @@
 - 使用 wget + bash：
 
 ```bash
-bash <(wget -qO- https://raw.githubusercontent.com/umut0301/auto-linux/main/auto-linux.sh)
+sudo bash <(wget -qO- https://raw.githubusercontent.com/umut0301/auto-linux/main/auto-linux.sh)
 ```
 
 - 使用 curl + bash（推荐）：
@@ -54,30 +54,43 @@ less auto-linux.sh       # 推荐人工检查脚本内容
 sudo bash auto-linux.sh
 ```
 
-3) 脚本为交互式菜单，示例操作：
+3) 菜单功能示例：
 
-- 安装/初始化 WireGuard 服务端：运行脚本 → 选择 1 → 输入接口名（默认 wg0）、服务器内网 IP（默认 10.0.0.1）与端口（默认 51820）。
-- 添加客户端：选择 WireGuard 菜单中的选项 2，输入客户端名，脚本会生成密钥、预共享密钥、客户端配置并生成二维码（如安装了 qrencode）。
-- 列出/查看/删除 客户端：使用菜单选项 3/4/5。
+```bash
+# 进入主菜单后可选择：
+# 1) 安装/初始化 WireGuard 服务端
+# 2) 添加客户端（生成配置 + QR）
+# 3) 列出客户端 / 查看配置与二维码 / 删除客户端
+# 4) 修改端口 / 配置 NAT / 查看状态 / 卸载
+```
 
 ## 非交互式 / 自动化 使用
 
-当前脚本以交互式菜单为主；如果你需要通过脚本自动完成某些操作（例如在部署脚本中自动添加客户端），可以：
-
-- 手动下载脚本并从中复制对应函数，比如 `wg_add_client`、`wg_create_server_conf` 等，单独运行这些函数（注意：脚本的 `main` 会在执行时进入菜单循环，若要在脚本内部直接调用函数请在本地修改脚本以支持命令行参数或在交互式环境中以 `source` + 调用函数的方式运行）。
-
-示例（不推荐在未经审查的远程环境中直接运行）：
+脚本支持直接调用函数方式，但主要以菜单交互为主，自动化场景建议在受控环境中二次封装：
 
 ```bash
-# 下载并打开脚本交互式运行（推荐）
-wget -O auto-linux.sh https://raw.githubusercontent.com/umut0301/auto-linux/main/auto-linux.sh
-less auto-linux.sh
 sudo bash auto-linux.sh
-
-# 或者（高级，需谨慎）：
-# 1) 下载并在受控环境中修改脚本以接受命令行参数
-# 2) 通过修改后的脚本传参实现自动化
 ```
+
+可通过环境变量设置服务端 Endpoint（用于客户端配置生成）：
+
+```bash
+WG_SERVER_ENDPOINT="1.2.3.4:51820" sudo bash auto-linux.sh wg_add_client alice
+```
+
+也可在服务端配置中添加注释（供脚本读取）：
+
+```
+# ServerPublicKey: <server_public_key>
+# ServerEndpoint: 1.2.3.4:51820
+```
+
+## 功能优化重点（开发记录）
+
+- 菜单流程优化：支持编号选择、自动列出现有接口/客户端、默认随机接口/端口/客户端名。
+- 配置健壮性：Endpoint/公钥自动推导，接口/客户端名校验，生成配置权限收敛。
+- NAT 与转发：自动读取网段并配置 iptables，避免空值导致的错误。
+- 清理逻辑：卸载时停止所有 `wg-quick@<iface>` 并清理 `/etc/wireguard`。
 
 ## 常见问题与排查
 
@@ -90,11 +103,9 @@ sudo bash auto-linux.sh
 
 - 权限问题：脚本需要 root 权限（脚本会检查并提示）。如果脚本提示无法写入 /etc/wireguard，确认是否使用 sudo 或以 root 身份运行。
 
-- qrencode 未安装：二维码显示与生成依赖 `qrencode`，脚本会尝试安装。如果没有生成二维码，可以手动安装 `qrencode` 然后重新添加客户端。
+- qrencode 未安装：二维码生成依赖 `qrencode`，脚本会尝试安装；若失败请手动安装后重新添加客户端。
 
-- NAT 与 iptables 部分：脚本尝试自动添加 NAT/转发规则并保存（netfilter-persistent / iptables-save 等）。注意：我在读取仓库中的 `auto-linux.sh` 时，发现 NAT/iptables 配置段的几行在仓库文件展示中出现了截断（包含字符串 "[...]"），这可能是获取时的展示问题或脚本被意外截断。强烈建议你在执行前打开 `auto-linux.sh` 检查第 320-340 行附近的 iptables/nat 相關命令是否完整并正确。
-
-如果需要，我可以帮你修复或补全这部分规则，并将更稳健的 NAT 配置推送到仓库。
+- Endpoint 或服务器公钥缺失：若客户端配置中的 `Endpoint`/`PublicKey` 为空，请设置 `WG_SERVER_ENDPOINT` 或在服务端配置里添加 `# ServerEndpoint:` 与 `# ServerPublicKey:` 注释（或确保 `PrivateKey` 存在）。
 
 ## 安全与建议
 
@@ -103,8 +114,7 @@ sudo bash auto-linux.sh
 
 ## 我可以为你做的事情
 
-- 我已经将 README 更新为更详细的版本，包含使用示例与注意事项。
 - 如果你希望，我可以：
-  - 修复 `auto-linux.sh` 中被截断或错误的 iptables/NAT 逻辑并提交补丁；
-  - 为脚本添加非交互式参数支持（例如通过命令行参数自动初始化服务端或添加客户端）；
-  - 在 README 中加入示例输出与更多操作流程截图（需你提供或授权生成）。
+  - 自动从公网 IP 生成 `ServerEndpoint`（可选参数/环境变量控制）；
+  - 添加 `wg syncconf`/`wg-quick` 自动重载；
+  - 为 README 增加更多示例与排错流程。
