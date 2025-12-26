@@ -34,14 +34,26 @@
 
 推荐使用 **完整版**，体验全部功能。只需一行命令，即可开始使用！
 
+**注意**: 请不要使用 `curl ... | bash` 的方式执行，因为这是一个交互式菜单脚本。
+
 ```bash
-curl -L -o auto-linux.sh https://raw.githubusercontent.com/umut0301/auto-linux/main/auto-linux.sh && chmod +x auto-linux.sh && ./auto-linux.sh
+# 下载脚本
+curl -L -o auto-linux.sh https://raw.githubusercontent.com/umut0301/auto-linux/main/auto-linux.sh
+# 添加执行权限
+chmod +x auto-linux.sh
+# 运行脚本
+./auto-linux.sh
 ```
 
 如果您只想要一个纯净的核心版本，可以使用以下命令：
 
 ```bash
-curl -L https://raw.githubusercontent.com/umut0301/auto-linux/main/auto-linux-main.sh | bash
+# 下载核心版脚本
+curl -L -o auto-linux-main.sh https://raw.githubusercontent.com/umut0301/auto-linux/main/auto-linux-main.sh
+# 添加执行权限
+chmod +x auto-linux-main.sh
+# 运行脚本
+./auto-linux-main.sh
 ```
 
 ---
@@ -81,4 +93,3 @@ curl -L https://raw.githubusercontent.com/umut0301/auto-linux/main/auto-linux-ma
 
 如果这个脚本对您有帮助，请在 GitHub 上给一个 ⭐️ Star！
 [https://github.com/umut0301/auto-linux](https://github.com/umut0301/auto-linux)
-
