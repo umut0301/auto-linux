@@ -35,7 +35,7 @@
 推荐使用 **完整版**，体验全部功能。只需一行命令，即可开始使用！
 
 ```bash
-curl -L https://raw.githubusercontent.com/umut0301/auto-linux/main/auto-linux.sh | bash
+curl -L -o auto-linux.sh https://raw.githubusercontent.com/umut0301/auto-linux/main/auto-linux.sh && chmod +x auto-linux.sh && ./auto-linux.sh
 ```
 
 如果您只想要一个纯净的核心版本，可以使用以下命令：
@@ -81,3 +81,4 @@ curl -L https://raw.githubusercontent.com/umut0301/auto-linux/main/auto-linux-ma
 
 如果这个脚本对您有帮助，请在 GitHub 上给一个 ⭐️ Star！
 [https://github.com/umut0301/auto-linux](https://github.com/umut0301/auto-linux)
+
