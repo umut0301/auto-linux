@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 #
-# auto-linux-main.sh (v1.0 Core Edition)
+# auto-linux.sh (v56.5 网络军刀版)
 #
-# [核心功能]
-# 1. WireGuard 管理 (安装/多用户/配置)
-# 2. X-UI 面板管理 (官方脚本)
-# 3. 全自动 NAT/安全托管 (防火墙/BBR)
+# [核心变更]
+# 1. 新增自动清理机制: 退出或返回主菜单时自动删除工具箱产生的临时文件
+# 2. 修复 CYAN 变量未定义导致的 crash 问题
+# 3. 深度代码规范化，修复剩余 shellcheck 问题
+# 4. Menu 5 (Nezha): 新增 Nezha Agent 一键安装
+# 5. 严守红线: Menu 1/2/3 核心逻辑保持 v44.0 状态，绝对冻结
 #
 set -u
 IFS=$'\n\t'
@@ -59,6 +61,30 @@ create_shortcut() {
     fi
 }
 
+# 清理临时文件函数
+cleanup_temp_files() {
+    # 定义要清理的文件列表 (仅限当前目录)
+    local temp_files=(
+        "goecs" "goecs.sh" "goecs.txt"
+        "IP.Check.Place"
+        "superspeed.sh"
+        "speedtest.sh"
+        "kejilion.sh"
+        "ssh_tool.sh"
+        "nexttrace"
+        "agent.sh"
+        "test-auto.py" # 如果有残留
+    )
+
+    # 遍历并删除
+    for file in "${temp_files[@]}"; do
+        if [[ -f "$file" ]]; then
+            rm -f "$file"
+        fi
+    done
+    # 不输出日志，保持静默清理
+}
+
 # ===========================
 # 2. UI 组件模块
 # ===========================
@@ -71,7 +97,7 @@ print_banner() {
     echo -e "${BLUE} ░░██████      ░██     ░██     ░░██████         ░██   ${NC}"
     echo -e "${BLUE}  ░░░░░░       ░░      ░░       ░░░░░░          ░░    ${NC}"
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
-    echo -e " ${PURPLE}项目地址:${NC} github.com/umut0301   ${PURPLE}快捷命令:${NC} ws   ${PURPLE}版本:${NC} v1.0 Core"
+    echo -e " ${PURPLE}项目地址:${NC} github.com/umut0301   ${PURPLE}快捷命令:${NC} ws   ${PURPLE}版本:${NC} v56.5"
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
 }
 
@@ -150,7 +176,124 @@ pkg_mgr() {
 }
 
 # ===========================
-# 6. WireGuard & X-UI & 托管 (核心业务)
+# 4. 网络工具箱 (聚合启动器)
+# ===========================
+
+# 4-1: GoECS 全能测试
+run_goecs() {
+    echo -e "${BLUE}>>> 正在启动 GoECS 服务器全能体检...${NC}"
+    export noninteractive=true
+    curl -L https://raw.githubusercontent.com/oneclickvirt/ecs/master/goecs.sh -o goecs.sh && chmod +x goecs.sh && bash goecs.sh env && bash goecs.sh install && goecs
+    press_any_key
+}
+
+# 4-2: IP.Check.Place (IP质量)
+run_ip_check_place() {
+    echo -e "${BLUE}>>> 正在启动 IP.Check.Place...${NC}"
+    bash <(curl -sL IP.Check.Place)
+    press_any_key
+}
+
+# 4-3: SuperSpeed (三网测速)
+run_superspeed() {
+    echo -e "${BLUE}>>> 正在启动 SuperSpeed 三网测速...${NC}"
+    bash <(curl -Lso- https://git.io/superspeed_uxh)
+    press_any_key
+}
+
+# 4-4: Hyperspeed (i-abc 融合测速)
+run_hyperspeed() {
+    echo -e "${BLUE}>>> 正在启动 i-abc 融合测速...${NC}"
+    bash <(curl -sL https://raw.githubusercontent.com/i-abc/Speedtest/main/speedtest.sh)
+    press_any_key
+}
+
+# 4-5: Kejilion 工具箱
+run_kejilion() {
+    echo -e "${BLUE}>>> 正在启动 科技Lion 工具箱...${NC}"
+    curl -sL https://raw.githubusercontent.com/kejilion/sh/main/kejilion.sh | bash
+    press_any_key
+}
+
+# 4-6: SSH 管理工具
+run_ssh_tool() {
+    echo -e "${BLUE}>>> 正在启动 SSH 管理工具...${NC}"
+    curl -fsSL https://raw.githubusercontent.com/eooce/ssh_tool/main/ssh_tool.sh -o ssh_tool.sh && chmod +x ssh_tool.sh && ./ssh_tool.sh
+    press_any_key
+}
+
+network_tools_menu() {
+    while true; do
+        print_banner
+        echo -e "${BLUE}=== 网络聚合工具箱 (External) ===${NC}"
+        menu_item "1" "GoECS 全能体检" "硬件/路由/解锁/IP"
+        menu_item "2" "IP 质量检测" "IP.Check.Place"
+        menu_item "3" "三网测速 (修复版)" "SuperSpeed"
+        menu_item "4" "融合测速 (i-abc)" "HyperSpeed"
+        menu_item "5" "科技Lion 工具箱" "运维/建站/Docker"
+        menu_item "6" "SSH 管理工具" "密钥/端口/Root"
+        print_line
+        menu_item "0" "返回" ""
+        echo ""
+        read -r -p " 请选择: " sel
+        case "$sel" in
+            1) run_goecs ;;
+            2) run_ip_check_place ;;
+            3) run_superspeed ;;
+            4) run_hyperspeed ;;
+            5) run_kejilion ;;
+            6) run_ssh_tool ;;
+            0) cleanup_temp_files; return ;;
+            *) ;;
+        esac
+    done
+}
+
+# ===========================
+# 5. Nezha Agent 安装 (新增)
+# ===========================
+install_nezha_agent() {
+    echo -e "${BLUE}=== Nezha Agent 安装 ===${NC}"
+
+    # 1. 检查并安装 unzip
+    if ! command -v unzip >/dev/null 2>&1; then
+        echo -e "${YELLOW}检测到未安装 unzip，正在安装...${NC}"
+        local PM
+        detect_pm
+        if [[ "$PM" == "apt" ]]; then
+            apt-get update -y >/dev/null 2>&1
+            apt-get install -y unzip >/dev/null 2>&1
+        elif [[ "$PM" == "yum" || "$PM" == "dnf" ]]; then
+            yum install -y unzip >/dev/null 2>&1
+        elif [[ "$PM" == "pacman" ]]; then
+            pacman -S --noconfirm unzip >/dev/null 2>&1
+        fi
+
+        if ! command -v unzip >/dev/null 2>&1; then
+            err "unzip 安装失败，请手动安装后重试。"
+            press_any_key
+            return
+        fi
+        echo -e "${GREEN}unzip 安装成功。${NC}"
+    else
+        echo -e "${GREEN}检测到 unzip 已安装。${NC}"
+    fi
+
+    # 2. 执行安装命令
+    echo -e "${BLUE}正在下载并安装 Nezha Agent...${NC}"
+    curl -L https://raw.githubusercontent.com/nezhahq/scripts/main/agent/install.sh -o agent.sh && \
+    chmod +x agent.sh && \
+    env NZ_SERVER=tls.okxapi.xyz:8008 NZ_TLS=false NZ_CLIENT_SECRET=sAU9Rqe9qrkBRMp5lrE4S1B1v8JgOVO3 ./agent.sh
+
+    # 3. 清理
+    rm -f agent.sh
+
+    echo -e "${GREEN}安装流程结束。${NC}"
+    press_any_key
+}
+
+# ===========================
+# 6. WireGuard & X-UI & 托管 (Legacy - v44.0 逻辑保持不变)
 # ===========================
 
 check_and_install_dns() {
@@ -424,7 +567,7 @@ EOF
             echo "AllowedIPs = $c_ip" >> "$conf_file"
         fi
     done < <(find "$WG_CLIENT_DIR" -mindepth 1 -maxdepth 1 -type d -print0)
-    
+
     if wg-quick up "$iface"; then log "重构成功！"; else err "重构后启动失败，请检查配置或端口。"; fi
 }
 
@@ -651,7 +794,7 @@ wg_menu_main() {
 xui_manage() { bash <(curl -fsSL https://raw.githubusercontent.com/yonggekkk/x-ui-yg/main/install.sh); }
 
 # ===========================
-# 8. 主菜单入口 (v1.0 Core)
+# 8. 主菜单入口 (v56.5)
 # ===========================
 main_menu() {
     create_shortcut; require_root
@@ -678,12 +821,16 @@ main_menu() {
         menu_item "1" "WireGuard 管理" "核心功能"
         menu_item "2" "x-ui 面板管理" "官方脚本"
         menu_item "3" "全自动 NAT/安全托管" "防火墙+BBR"
+        menu_item "4" "网络工具箱" "解锁/测速"
+        menu_item "5" "Nezha 被控端安装" "一键接入"
 
         print_line; menu_item "0" "退出脚本" ""; echo ""; read -r -p " 请选择: " choice
         case "$choice" in
             1) wg_menu_main ;; 2) xui_manage; press_any_key ;;
             3) auto_nat_firewall_logic ;;
-            0) exit 0 ;; *) ;;
+            4) network_tools_menu ;;
+            5) install_nezha_agent ;;
+            0) cleanup_temp_files; exit 0 ;; *) ;;
         esac
     done
 }

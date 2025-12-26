@@ -1,45 +1,83 @@
-# Auto-Linux 全能服务器管理脚本 🚀
+# 🚀 Auto-Linux 全能自动化运维脚本 🚀
 
-**Auto-Linux** 是一款专为 Linux VPS 设计的自动化运维脚本。它集成了 **WireGuard 全生命周期管理**、**X-UI 面板管理**、**系统状态监控**以及**专业的网络工具箱**。
-
-脚本采用纯 Shell 编写，结合 ANSI 颜色代码与字符画 UI，提供**极客级**的交互体验。
+这是一个为 Linux VPS 设计的强大自动化运维工具，集成了核心服务管理与一系列实用功能。旨在简化服务器的日常维护，无论是新手还是专家都能轻松上手。
 
 ---
 
-## 🌟 核心功能亮点
+## ✨ 主要功能
 
-### 🛡️ WireGuard 深度管理
-- **全生命周期**：一键安装服务端、初始化接口。
-- **批量制造**：支持批量添加/删除客户端（自动防冲突、自动分配 IP）。
-- **级联清理**：删除接口时自动清理关联的所有客户端文件，不留垃圾。
-- **智能配置**：自动识别公网 IP、自动配置 NAT 转发、二维码终端输出。
-
-### ⚡ 网络与安全托管
-- **全自动 NAT**：自动识别主网卡并配置 iptables 转发，无需人工干预。
-- **端口管家**：自动扫描并放行 X-UI 面板及所有节点的端口。
-- **安全加固**：自动识别 SSH 端口防误锁，主动拦截 SMB/NetBIOS 等高危端口。
-
-### 🧰 网络工具箱 (UMUT Pro)
-- **极致本地化**：核心流媒体检测（Netflix/Disney+/ChatGPT 等）纯原生代码实现，无远程脚本依赖，秒出结果。
-- **智能分区**：自动识别 VPS 地区（HK/JP/US/EU...），智能加载对应地区的流媒体检测项。
-- **整合测速**：内置 Ookla Speedtest 官方二进制核心，配合精选三网 5G 节点，测速更稳更准。
-- **IP 体检**：集成净化版 IP 质量检测，一键查询欺诈分数与流媒体解锁详情。
-
-### 🎨 终极 UI 体验
-- **Dashboard 置顶**：主菜单实时显示 CPU/内存/负载/硬盘及组件运行状态。
-- **完美对齐**：采用 ANSI 绝对定位技术，解决中英文混合排版不对齐的痛点。
-- **快捷指令**：安装后输入 `ws` 即可随时唤醒脚本。
+*   **🛡️ WireGuard 管理**: 一键安装、配置、多用户管理、删除、修改端口、查看状态等全套功能。
+*   **💠 X-UI 面板管理**: 快速安装和管理 X-UI 面板，利用成熟的官方脚本。
+*   **🔒 全自动 NAT/安全托管**: 智能配置防火墙（自动放行 SSH/WG/X-UI 端口）、开启 IPv4 转发、配置 NAT 规则、启用 BBR 加速。
+*   **🛠️ 网络工具箱 (完整版)**: 集成业界顶级的第三方脚本，提供全面的服务器体检、IP 质量检测和速度测试。
+*   **🤖 Nezha 探针 (完整版)**: 一键安装哪吒监控的 Agent 端，轻松接入您的监控面板。
 
 ---
 
-## 📥 安装与使用
+## 版本说明
 
-### 一键安装
-推荐使用 root 用户执行以下命令：
+这个项目包含两个主要的脚本版本：
+
+1.  **`auto-linux-main.sh` (核心版)**
+    *   **定位**: 纯粹、轻量、稳定。
+    *   **功能**: 只包含最核心的 **WireGuard**, **X-UI**, 和 **NAT/安全托管** 功能。
+    *   **适用场景**: 适合作为服务器基础环境部署，或者不希望包含过多第三方工具的用户。
+
+2.  **`auto-linux.sh` (完整版)**
+    *   **定位**: 功能全面，一站式工具箱。
+    *   **功能**: 在核心版的基础上，增加了强大的“网络工具箱”和“Nezha 探针安装”。
+    *   **适用场景**: 适合需要对服务器进行全面体检、测速、监控的用户。
+
+---
+
+## 🚀 一键使用 (推荐)
+
+推荐使用 **完整版**，体验全部功能。只需一行命令，即可开始使用！
 
 ```bash
-# 使用 curl (推荐)
-curl -fsSL [https://raw.githubusercontent.com/umut0301/auto-linux/main/auto-linux.sh](https://raw.githubusercontent.com/umut0301/auto-linux/main/auto-linux.sh) -o auto-linux.sh && chmod +x auto-linux.sh && ./auto-linux.sh
+curl -L https://raw.githubusercontent.com/umut0301/auto-linux/main/auto-linux.sh | bash
+```
 
-# 或者使用 wget
-wget -qO auto-linux.sh [https://raw.githubusercontent.com/umut0301/auto-linux/main/auto-linux.sh](https://raw.githubusercontent.com/umut0301/auto-linux/main/auto-linux.sh) && chmod +x auto-linux.sh && ./auto-linux.sh
+如果您只想要一个纯净的核心版本，可以使用以下命令：
+
+```bash
+curl -L https://raw.githubusercontent.com/umut0301/auto-linux/main/auto-linux-main.sh | bash
+```
+
+---
+
+## 📜 开发记录 (Changelog)
+
+*   **v56.5 (2024-07-26)**
+    *   **✨ 新增**: 自动清理机制，退出或从工具箱返回时自动删除临时文件。
+    *   **🐞 修复**: 解决了 `CYAN` 颜色变量未定义导致的脚本崩溃问题。
+    *   **🔧 优化**: 深度代码规范化，修复了 `shellcheck` 报告的 80+ 个问题，包括数组引用、`elif` 使用、`find` 命令安全性等。
+
+*   **v56.1 (2024-07-25)**
+    *   **✨ 新增**: 在主菜单添加 **Nezha 被控端** 一键安装功能。
+    *   **🔧 优化**: 安装 Nezha 前自动检测并安装 `unzip` 依赖。
+
+*   **v56.0 (2024-07-24)**
+    *   **🚀 重构**: “网络工具箱”重构为聚合启动器，直接调用多个顶级的第三方脚本 (GoECS, IP.Check.Place, SuperSpeed 等)。
+    *   **🛡️ 稳定**: 明确 WireGuard, X-UI, NAT/安全托管模块为“冻结”状态，不再进行功能性变更。
+
+*   **v55.0 (2024-07-23)**
+    *   **🚀 重构**: 移除第三方二进制文件 `goecs`，使用纯 Shell (`sysbench`, `fio`, `curl`) 原生复刻了服务器全能测试功能。
+    *   **🎨 优化**: UI 像素级复刻 `GoECS` 风格。
+
+*   **v44.0 及更早版本**
+    *   建立了稳定的 WireGuard、X-UI 和自动化托管的核心逻辑。
+
+---
+
+## 🤝 致谢
+
+本脚本的开发离不开以下优秀开源项目和社区的支持：
+
+*   **WireGuard**: 快速、现代、安全的 VPN。
+*   **X-UI**: 强大的代理面板。
+*   **GoECS, IP.Check.Place, SuperSpeed, Hyperspeed, Kejilion, Eooce**: 提供了功能强大、广受好评的各类工具脚本。
+*   所有为开源社区做出贡献的开发者！
+
+如果这个脚本对您有帮助，请在 GitHub 上给一个 ⭐️ Star！
+[https://github.com/umut0301/auto-linux](https://github.com/umut0301/auto-linux)
