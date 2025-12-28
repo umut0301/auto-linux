@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 #
-# auto-linux.sh (v56.5 网络军刀版)
+# auto-linux.sh (v56.6 网络军刀版)
 #
 # [核心变更]
-# 1. 新增自动清理机制: 退出或返回主菜单时自动删除工具箱产生的临时文件
-# 2. 修复 CYAN 变量未定义导致的 crash 问题
-# 3. 深度代码规范化，修复剩余 shellcheck 问题
-# 4. Menu 5 (Nezha): 新增 Nezha Agent 一键安装
-# 5. 严守红线: Menu 1/2/3 核心逻辑保持 v44.0 状态，绝对冻结
+# 1. 紧急修复: 恢复被误删的 select_smart 函数，保障 WireGuard 模块正常运行
+# 2. 新增自动清理机制: 退出或返回主菜单时自动删除工具箱产生的临时文件
+# 3. Menu 5 (Nezha): 新增 Nezha Agent 一键安装
+# 4. 严守红线: Menu 1/2/3 核心逻辑保持 v44.0 状态，绝对冻结
 #
 set -u
 IFS=$'\n\t'
@@ -61,6 +60,45 @@ create_shortcut() {
     fi
 }
 
+# 恢复 select_smart 函数
+select_smart() {
+    local title="$1" list_str="$2" ret_var="$3"
+    local items=() old_ifs
+    old_ifs="$IFS"
+    IFS=' ' read -r -a items <<< "$list_str"
+    IFS="$old_ifs"
+    if [[ ${#items[@]} -eq 0 ]]; then
+        echo " (无数据)"
+        eval "$ret_var=''"
+        return
+    fi
+    echo -e "${BLUE}--- $title ---${NC}"
+    local i=0
+    local item
+    for item in "${items[@]}"; do
+        i=$((i+1))
+        echo "$i) $item"
+    done
+    echo "------------------"
+    local choice
+    read -r -p "请输入编号或名称: " choice
+    choice=$(trim "$choice")
+    if [[ "$choice" =~ ^[0-9]+$ && "$choice" -ge 1 && "$choice" -le ${#items[@]} ]]; then
+        local index=$((choice-1))
+        eval "$ret_var='${items[$index]}'"
+        return
+    fi
+    for item in "${items[@]}"; do
+        if [[ "$item" == "$choice" ]]; then
+            eval "$ret_var='$item'"
+            return
+        fi
+    done
+    warn "无效的选择"
+    eval "$ret_var=''"
+}
+
+
 # 清理临时文件函数
 cleanup_temp_files() {
     # 定义要清理的文件列表 (仅限当前目录)
@@ -98,7 +136,7 @@ print_banner() {
     echo -e "${BLUE} ░░██████      ░██     ░██     ░░██████         ░██   ${NC}"
     echo -e "${BLUE}  ░░░░░░       ░░      ░░       ░░░░░░          ░░    ${NC}"
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
-    echo -e " ${PURPLE}项目地址:${NC} github.com/umut0301   ${PURPLE}快捷命令:${NC} ws   ${PURPLE}版本:${NC} v56.5"
+    echo -e " ${PURPLE}项目地址:${NC} github.com/umut0301   ${PURPLE}快捷命令:${NC} ws   ${PURPLE}版本:${NC} v56.6"
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
 }
 
@@ -294,7 +332,7 @@ install_nezha_agent() {
 }
 
 # ===========================
-# 6. WireGuard & X-UI & 托管 (Legacy - v44.0 逻辑保持不变)
+# 6. WireGuard & X-UI & 托管 (核心业务)
 # ===========================
 
 check_and_install_dns() {
@@ -550,7 +588,6 @@ SaveConfig = true
 PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -t nat -A POSTROUTING -o ${eth} -j MASQUERADE
 PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -t nat -D POSTROUTING -o ${eth} -j MASQUERADE
 EOF
-    local client_dirs
     # 使用 find -print0 和 while read -d '' 来安全处理文件名
     while IFS= read -r -d '' c_dir; do
         local c_conf="$c_dir/$(basename "$c_dir").conf"
@@ -795,7 +832,7 @@ wg_menu_main() {
 xui_manage() { bash <(curl -fsSL https://raw.githubusercontent.com/yonggekkk/x-ui-yg/main/install.sh); }
 
 # ===========================
-# 8. 主菜单入口 (v56.5)
+# 8. 主菜单入口 (v56.6)
 # ===========================
 main_menu() {
     create_shortcut; require_root
