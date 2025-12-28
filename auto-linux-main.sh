@@ -45,6 +45,23 @@ trim() {
     echo -n "$var"
 }
 
+# 恢复 read_input 函数
+read_input() {
+    local prompt="$1" default="$2" var_ref="$3" input
+    if [[ -n "$default" ]]; then
+        read -r -p "${prompt} [默认: ${default}]: " input
+    else
+        read -r -p "${prompt}: " input
+    fi
+    input=$(trim "${input:-$default}")
+    # 特殊的 IP 补全逻辑
+    if [[ "$var_ref" == *"ip"* && "$input" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo -e "${BLUE}[提示] 自动补全 IP: ${input}.1${NC}"
+        input="${input}.1"
+    fi
+    eval "$var_ref='$input'"
+}
+
 read_conf_value() {
     local key="$1"
     local file="$2"
@@ -57,6 +74,44 @@ create_shortcut() {
         ln -sf "$0" /usr/bin/ws
         chmod +x /usr/bin/ws
     fi
+}
+
+# 恢复 select_smart 函数
+select_smart() {
+    local title="$1" list_str="$2" ret_var="$3"
+    local items=() old_ifs
+    old_ifs="$IFS"
+    IFS=' ' read -r -a items <<< "$list_str"
+    IFS="$old_ifs"
+    if [[ ${#items[@]} -eq 0 ]]; then
+        echo " (无数据)"
+        eval "$ret_var=''"
+        return
+    fi
+    echo -e "${BLUE}--- $title ---${NC}"
+    local i=0
+    local item
+    for item in "${items[@]}"; do
+        i=$((i+1))
+        echo "$i) $item"
+    done
+    echo "------------------"
+    local choice
+    read -r -p "请输入编号或名称: " choice
+    choice=$(trim "$choice")
+    if [[ "$choice" =~ ^[0-9]+$ && "$choice" -ge 1 && "$choice" -le ${#items[@]} ]]; then
+        local index=$((choice-1))
+        eval "$ret_var='${items[$index]}'"
+        return
+    fi
+    for item in "${items[@]}"; do
+        if [[ "$item" == "$choice" ]]; then
+            eval "$ret_var='$item'"
+            return
+        fi
+    done
+    warn "无效的选择"
+    eval "$ret_var=''"
 }
 
 # ===========================
@@ -289,17 +344,14 @@ create_server_logic() {
     install_wg || return
     echo -e "${BLUE}=== 配置 WireGuard 服务端 ===${NC}"
     local iface def_iface="wg0"
-    read -r -p "接口名称 [默认: ${def_iface}]: " iface
-    iface=$(trim "${iface:-$def_iface}")
+    read_input "接口名称" "$def_iface" iface
     if [[ ! "$iface" =~ ^[A-Za-z0-9_-]+$ ]]; then err "非法名称"; return; fi
     if [[ ${#iface} -gt 15 ]]; then err "接口名过长"; return; fi
-    local ip_cidr def_ip="10.0.0.1"
-    read -r -p "服务端内网IP [默认: ${def_ip}]: " ip_cidr
-    ip_cidr=$(trim "${ip_cidr:-$def_ip}")
+    local ip_cidr def_ip="10.0.0"
+    read_input "服务端内网IP段" "$def_ip" ip_cidr
     local port def_port
     def_port=$(shuf -i 20000-30000 -n 1)
-    read -r -p "监听端口 [默认: ${def_port}]: " port
-    port=$(trim "${port:-$def_port}")
+    read_input "监听端口" "$def_port" port
     local eth
     eth=$(ip route | awk '/default/ {print $5; exit}')
     if [[ -z "$eth" ]]; then eth="eth0"; fi
@@ -449,13 +501,11 @@ clean_zombies_logic() {
 add_single_client() {
     local iface="$1" name def_name
     def_name=$(get_next_client_name)
-    read -r -p "客户端名称 [默认: ${def_name}]: " name
-    name=$(trim "${name:-$def_name}")
+    read_input "客户端名称" "$def_name" name
     if [[ ! "$name" =~ ^[A-Za-z0-9_-]+$ ]]; then err "非法名称"; press_any_key; return; fi
     if [[ -d "$WG_CLIENT_DIR/$name" ]]; then warn "用户已存在!"; press_any_key; return; fi
     local set_ip
-    read -r -p "指定内网IP (留空自动分配): " set_ip
-    set_ip=$(trim "$set_ip")
+    read_input "指定内网IP (留空自动分配)" "" set_ip
     if [[ -n "$set_ip" && ! "$set_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then warn "IP格式错误，将自动分配"; set_ip=""; fi
     log "正在生成..."
     local res_ip
