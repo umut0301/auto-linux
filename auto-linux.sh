@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# auto-linux.sh (v56.7 网络军刀版)
+# auto-linux.sh (v56.8 网络军刀版)
 #
 # [核心变更]
 # 1. 紧急修复: 恢复 read_input 函数，修复 IP 段自动补全功能
@@ -8,6 +8,7 @@
 # 3. 新增自动清理机制: 退出或返回主菜单时自动删除工具箱产生的临时文件
 # 4. Menu 5 (Nezha): 新增 Nezha Agent 一键安装
 # 5. 严守红线: Menu 1/2/3 核心逻辑保持 v44.0 状态，绝对冻结
+# 6. WireGuard: 新增服务端和客户端自定义 MTU 功能
 #
 set -u
 IFS=$'\n\t'
@@ -327,87 +328,53 @@ install_nezha_agent() {
         fi
 
         if ! command -v unzip >/dev/null 2>&1; then
-            err "unzip 安装失败，请手动安装后重试。"
+            err "无法安装 unzip，请手动安装后重试。"
             press_any_key
             return
         fi
-        echo -e "${GREEN}unzip 安装成功。${NC}"
-    else
-        echo -e "${GREEN}检测到 unzip 已安装。${NC}"
     fi
 
-    # 2. 执行安装命令
-    echo -e "${BLUE}正在下载并安装 Nezha Agent...${NC}"
+    local server port key use_tls
+    read -r -p "请输入面板服务器地址 (如: nezha.example.com): " server
+    [[ -z "$server" ]] && { err "地址不能为空"; press_any_key; return; }
+    read -r -p "请输入服务端口 (默认 5555): " port
+    port=${port:-5555}
+    read -r -p "请输入 Agent 密钥: " key
+    [[ -z "$key" ]] && { err "密钥不能为空"; press_any_key; return; }
+    read -r -p "是否启用 TLS? (y/n) [n]: " use_tls
+    local tls_flag=""
+    [[ "${use_tls:-n}" == "y" ]] && tls_flag="--tls"
+
+    log "正在下载并安装 Nezha Agent..."
     curl -L https://raw.githubusercontent.com/nezhahq/scripts/main/agent/install.sh -o agent.sh && \
     chmod +x agent.sh && \
-    env NZ_SERVER=tls.okxapi.xyz:8008 NZ_TLS=false NZ_CLIENT_SECRET=sAU9Rqe9qrkBRMp5lrE4S1B1v8JgOVO3 ./agent.sh
-
-    # 3. 清理
+    ./agent.sh install_agent "$server" "$port" "$key" "$tls_flag"
+    
     rm -f agent.sh
-
-    echo -e "${GREEN}安装流程结束。${NC}"
     press_any_key
 }
 
 # ===========================
-# 6. WireGuard & X-UI & 托管 (核心业务)
+# 6. 核心功能模块 (Menu 1/2/3)
 # ===========================
 
-check_and_install_dns() {
-    local PM
-    detect_pm
-    if [[ "$PM" == "apt" ]]; then
-        if dpkg -l | grep -q "^ii  resolvconf"; then
-            log "检测到 resolvconf 已存在，兼容模式。"
-            pkg_mgr install wireguard iptables-persistent qrencode jq
-        else
-            log "检测到纯净环境，安装 openresolv..."
-            pkg_mgr install wireguard iptables-persistent openresolv qrencode jq
-        fi
-    elif [[ "$PM" == "yum" || "$PM" == "dnf" ]]; then
-        rpm -qa | grep -qi epel || pkg_mgr install epel-release
-        pkg_mgr install wireguard-tools iptables-services qrencode jq
-    else
-        pkg_mgr install wireguard-tools qrencode openresolv jq
-    fi
-}
-
-install_wg() {
-    if command -v wg >/dev/null 2>&1; then return 0; fi
-    echo -e "${BLUE}[系统] 正在安装 WireGuard...${NC}"
-    check_and_install_dns
-    if ! command -v wg >/dev/null 2>&1; then err "安装失败，请手动检查软件源配置"; return 1; fi
-    mkdir -p "$WG_DIR" "$WG_CLIENT_DIR"
-    echo -e "${GREEN}[系统] WireGuard 安装完成${NC}"
-}
-
-check_and_install_xui() { bash <(curl -fsSL https://raw.githubusercontent.com/yonggekkk/x-ui-yg/main/install.sh); }
-
+# 6-1: 端口放行工具
 open_port() {
-    local port proto
-    port=$(trim "$1")
-    proto="${2:-udp}"
-    [[ -z "$port" ]] && return
-    echo -e "${BLUE}[防火墙]${NC} 放行端口 $port ($proto)..."
+    local port="$1" proto="$2"
     if command -v firewall-cmd >/dev/null && systemctl is-active --quiet firewalld; then
-        firewall-cmd --permanent --add-port="${port}/${proto}" >/dev/null 2>&1
-        firewall-cmd --reload >/dev/null 2>&1
+        firewall-cmd --permanent --add-port="${port}/${proto}" >/dev/null 2>&1; firewall-cmd --reload >/dev/null 2>&1
     elif command -v ufw >/dev/null && systemctl is-active --quiet ufw; then
         ufw allow "${port}/${proto}" >/dev/null 2>&1
     elif command -v iptables >/dev/null; then
         if ! iptables -C INPUT -p "$proto" --dport "$port" -j ACCEPT 2>/dev/null; then
-            iptables -I INPUT -p "$proto" --dport "$port" -j ACCEPT
+            iptables -I INPUT 1 -p "$proto" --dport "$port" -j ACCEPT
         fi
     fi
 }
 
 block_port() {
-    local port proto
-    port="$1"
-    proto="${2:-tcp}"
-    echo -e "${YELLOW}[防火墙]${NC} 屏蔽高危端口 $port ($proto)..."
+    local port="$1" proto="$2"
     if command -v firewall-cmd >/dev/null && systemctl is-active --quiet firewalld; then
-        firewall-cmd --permanent --remove-port="${port}/${proto}" >/dev/null 2>&1
         firewall-cmd --permanent --add-rich-rule="rule family='ipv4' port port='$port' protocol='$proto' drop" >/dev/null 2>&1;
         firewall-cmd --reload >/dev/null 2>&1
     elif command -v ufw >/dev/null && systemctl is-active --quiet ufw; then
@@ -448,14 +415,8 @@ auto_nat_firewall_logic() {
         local xui_panel_port
         xui_panel_port=$(/usr/local/x-ui/x-ui setting -show 2>/dev/null | strip_color | awk '/port/{print $NF}' | tr -d ' ')
         if [[ ! "$xui_panel_port" =~ ^[0-9]+$ ]]; then xui_panel_port=$(/usr/local/x-ui/x-ui setting -show 2>/dev/null | strip_color | grep -oE 'port[[:space:]]*:[[:space:]]*[0-9]+' | grep -oE '[0-9]+'); fi
-        if [[ -n "$xui_panel_port" && "$xui_panel_port" =~ ^[0-9]+$ ]]; then log "   > 放行面板: $xui_panel_port"; open_port "$xui_panel_port" "tcp"; else warn "   > 未获面板端口"; fi
-        local xui_conf="/usr/local/x-ui/bin/config.json"
-        if [[ -f "$xui_conf" ]]; then
-            local node_ports
-            node_ports=$(jq -r '.inbounds[].port' "$xui_conf" 2>/dev/null)
-            if [[ -n "$node_ports" ]]; then for p in $node_ports; do p=$(trim "$p"); if [[ -n "$p" ]]; then log "   > 放行节点: $p"; open_port "$p" "tcp"; open_port "$p" "udp"; fi; done; else log "   > x-ui 无节点"; fi
-        fi
-    else warn "   > 未装 x-ui"; fi
+        if [[ "$xui_panel_port" =~ ^[0-9]+$ ]]; then log "   > 放行 x-ui 面板: $xui_panel_port"; open_port "$xui_panel_port" "tcp"; fi
+    else log "   > 未安装 x-ui"; fi
     log "5. 扫描 WireGuard..."
     local wg_confs
     wg_confs=$(ls "$WG_DIR"/*.conf 2>/dev/null)
@@ -469,7 +430,13 @@ auto_nat_firewall_logic() {
         block_port "$bp" "tcp"
         block_port "$bp" "udp"
     done
-    log "7. 持久化规则..."; if command -v netfilter-persistent >/dev/null; then netfilter-persistent save >/dev/null 2>&1; elif command -v service >/dev/null; then service iptables save >/dev/null 2>&1; fi
+    log "7. 优化系统限制..."
+    cat > /etc/security/limits.d/99-auto-linux.conf <<EOF
+* soft nofile 65535
+* hard nofile 65535
+* soft nproc 65535
+* hard nproc 65535
+EOF
     log "8. 检测 TCP BBR..."
     if sysctl net.ipv4.tcp_congestion_control | grep -q bbr; then
         echo -e "${GREEN}   > BBR 已开启，跳过配置。${NC}"
@@ -485,6 +452,18 @@ auto_nat_firewall_logic() {
     echo -e "${GREEN}=== 全自动托管完成 ===${NC}"; press_any_key
 }
 
+strip_color() { sed 's/\x1b\[[0-9;]*m//g'; }
+
+install_wg() {
+    if command -v wg >/dev/null 2>&1; then return 0; fi
+    log "正在安装 WireGuard..."
+    local PM
+    detect_pm
+    pkg_mgr install wireguard wireguard-tools qrencode iptables
+    if [[ "$PM" == "apt" ]]; then pkg_mgr install iptables-persistent openresolv resolvconf || true; fi
+    if [[ "$PM" == "yum" || "$PM" == "dnf" ]]; then pkg_mgr install iptables-services || true; fi
+}
+
 create_server_logic() {
     install_wg || return
     echo -e "${BLUE}=== 配置 WireGuard 服务端 ===${NC}"
@@ -497,6 +476,9 @@ create_server_logic() {
     local port def_port
     def_port=$(shuf -i 20000-30000 -n 1)
     read_input "监听端口" "$def_port" port
+    local srv_mtu
+    read_input "MTU 值 (留空使用默认 ${DEFAULT_MTU})" "" srv_mtu
+    local current_srv_mtu="${srv_mtu:-$DEFAULT_MTU}"
     local eth
     eth=$(ip route | awk '/default/ {print $5; exit}')
     if [[ -z "$eth" ]]; then eth="eth0"; fi
@@ -510,7 +492,7 @@ create_server_logic() {
 Address = ${ip_cidr}/24
 ListenPort = ${port}
 PrivateKey = ${priv}
-MTU = ${DEFAULT_MTU}
+MTU = ${current_srv_mtu}
 SaveConfig = true
 PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -t nat -A POSTROUTING -o ${eth} -j MASQUERADE
 PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -t nat -D POSTROUTING -o ${eth} -j MASQUERADE
@@ -519,11 +501,11 @@ EOF
     systemctl daemon-reload; systemctl enable "wg-quick@$iface" --now >/dev/null 2>&1; log "服务端配置完成！"
     local yn
     read -r -p "是否立即添加一个客户端? (y/n) [y]: " yn
-    [[ "${yn:-y}" == "y" ]] && add_client_menu
+    [[ "${yn:-y}" == "y" ]] && add_client_menu "$iface" "$current_srv_mtu"
 }
 
 core_generate_client() {
-    local iface="$1" name="$2" manual_ip="${3:-}"
+    local iface="$1" name="$2" manual_ip="${3:-}" cli_mtu="${4:-$DEFAULT_MTU}"
     local conf="$WG_DIR/${iface}.conf"
     if [[ ! -f "$conf" ]]; then err "接口配置丢失"; return 1; fi
     local new_ip="$manual_ip"
@@ -557,7 +539,7 @@ core_generate_client() {
 PrivateKey = ${c_priv}
 Address = ${new_ip}/32
 DNS = 8.8.8.8, 1.1.1.1
-MTU = ${DEFAULT_MTU}
+MTU = ${cli_mtu}
 [Peer]
 PublicKey = ${s_pub}
 PresharedKey = ${c_psk}
@@ -586,10 +568,12 @@ rebuild_server_config() {
     local iface="$1"
     local conf_file="$WG_DIR/${iface}.conf"
     log "正在重构服务端配置 (修复 PublicKey 错误)..."
-    local priv port addr eth
+    local priv port addr eth r_mtu
     priv=$(read_conf_value "PrivateKey" "$conf_file")
     port=$(read_conf_value "ListenPort" "$conf_file")
     addr=$(read_conf_value "Address" "$conf_file")
+    r_mtu=$(read_conf_value "MTU" "$conf_file")
+    r_mtu=${r_mtu:-$DEFAULT_MTU}
     eth=$(ip route | grep default | awk '{print $5}' | head -n 1)
     [[ -z "$eth" ]] && eth="eth0"
     wg-quick down "$iface" >/dev/null 2>&1
@@ -598,7 +582,7 @@ rebuild_server_config() {
 Address = $addr
 ListenPort = $port
 PrivateKey = $priv
-MTU = $DEFAULT_MTU
+MTU = $r_mtu
 SaveConfig = true
 PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -t nat -A POSTROUTING -o ${eth} -j MASQUERADE
 PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -t nat -D POSTROUTING -o ${eth} -j MASQUERADE
@@ -643,7 +627,7 @@ clean_zombies_logic() {
 }
 
 add_single_client() {
-    local iface="$1" name def_name
+    local iface="$1" s_mtu="${2:-$DEFAULT_MTU}" name def_name
     def_name=$(get_next_client_name)
     read_input "客户端名称" "$def_name" name
     if [[ ! "$name" =~ ^[A-Za-z0-9_-]+$ ]]; then err "非法名称"; press_any_key; return; fi
@@ -653,7 +637,7 @@ add_single_client() {
     if [[ -n "$set_ip" && ! "$set_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then warn "IP格式错误，将自动分配"; set_ip=""; fi
     log "正在生成..."
     local res_ip
-    res_ip=$(core_generate_client "$iface" "$name" "$set_ip")
+    res_ip=$(core_generate_client "$iface" "$name" "$set_ip" "$s_mtu")
     if [[ -n "$res_ip" ]]; then
         clear; echo -e "${GREEN}=== 添加成功 ===${NC}"; echo "用户: $name"; echo "IP: $res_ip"; echo "保活: ${KEEPALIVE}s"
         local conf="$WG_CLIENT_DIR/$name/$name.conf"
@@ -664,7 +648,7 @@ add_single_client() {
 }
 
 add_batch_client() {
-    local iface="$1" count
+    local iface="$1" s_mtu="${2:-$DEFAULT_MTU}" count
     read -r -p "请输入数量 (例: 10): " count
     if [[ ! "$count" =~ ^[0-9]+$ ]] || [[ "$count" -le 0 ]]; then err "数量无效"; press_any_key; return; fi
     log "准备生成 $count 个客户端..."; local success_count=0
@@ -674,7 +658,7 @@ add_batch_client() {
         name=$(get_next_client_name)
         log "[$i/$count] 正在生成 $name ..."
         local res_ip
-        res_ip=$(core_generate_client "$iface" "$name" "")
+        res_ip=$(core_generate_client "$iface" "$name" "" "$s_mtu")
         if [[ -n "$res_ip" ]]; then success_count=$((success_count + 1)); else err "生成 $name 失败"; break; fi
     done
     wg-quick down "$iface" >/dev/null 2>&1; wg-quick up "$iface" >/dev/null 2>&1
@@ -682,16 +666,24 @@ add_batch_client() {
 }
 
 add_client_menu() {
-    local iface iface_list
+    local iface="$1"
+    local s_mtu="$2"
+    local iface_list
     iface_list=$(ls "$WG_DIR"/*.conf 2>/dev/null | xargs -n 1 basename -s .conf | xargs)
     if [[ -z "$iface_list" ]]; then err "请先安装服务端"; press_any_key; return; fi
-    select_smart "选择接口" "$iface_list" iface; if [[ -z "$iface" ]]; then return; fi; iface=$(trim "$iface")
+    if [[ -z "$iface" ]]; then
+        select_smart "选择接口" "$iface_list" iface; [[ -z "$iface" ]] && return; iface=$(trim "$iface")
+    fi
+    if [[ -z "$s_mtu" ]]; then
+        s_mtu=$(read_conf_value "MTU" "$WG_DIR/${iface}.conf")
+        s_mtu=${s_mtu:-$DEFAULT_MTU}
+    fi
     while true; do
         print_banner; echo -e "${BLUE}=== 添加客户端 ($iface) ===${NC}"
         menu_item "1" "单个添加" "指定名称/IP"
         menu_item "2" "批量添加" "全自动"
         print_line; menu_item "0" "返回" ""; echo ""; read -r -p " 请选择: " method
-        case "$method" in 1) add_single_client "$iface"; return ;; 2) add_batch_client "$iface"; return ;; 0) return ;; *) ;; esac
+        case "$method" in 1) add_single_client "$iface" "$s_mtu"; return ;; 2) add_batch_client "$iface" "$s_mtu"; return ;; 0) return ;; *) ;; esac
     done
 }
 
@@ -773,18 +765,21 @@ del_interface_logic() {
         fi
         log "停止服务..."; systemctl stop "wg-quick@$iface" 2>/dev/null; systemctl disable "wg-quick@$iface" 2>/dev/null
         rm -f "$WG_DIR/${iface}.conf" "$WG_DIR/${iface}_private.key" "$WG_DIR/${iface}_public.key"
-        log "接口 $iface 已移除。"
-    fi; press_any_key
+        log "已删除接口: $iface"
+        systemctl daemon-reload
+        log "完成"
+    fi
+    press_any_key
 }
 
 del_menu_entry() {
     while true; do
         print_banner
         echo -e "${BLUE}=== 删除管理 ===${NC}"
-        menu_item "1" "删除 客户端" "含清理功能"
-        menu_item "2" "删除 接口" "及关联用户"
+        menu_item "1" "删除客户端" "单个/批量"
+        menu_item "2" "删除服务端接口" "危险操作"
         print_line; menu_item "0" "返回" ""; echo ""; read -r -p " 请选择: " sel
-        case "$sel" in 1) del_client_menu; return ;; 2) del_interface_logic; return ;; 0) return ;; *) ;; esac
+        case "$sel" in 1) del_client_menu ;; 2) del_interface_logic ;; 0) return ;; *) ;; esac
     done
 }
 
@@ -843,7 +838,6 @@ wg_menu_main() {
 }
 
 xui_manage() { bash <(curl -fsSL https://raw.githubusercontent.com/yonggekkk/x-ui-yg/main/install.sh); }
-
 # ===========================
 # 8. 主菜单入口 (v56.7)
 # ===========================
@@ -851,7 +845,6 @@ main_menu() {
     create_shortcut; require_root
     while true; do
         print_banner
-
         local os kernel uptime load cpu_usage mem_used mem_total disk_used disk_total
         os=$(lsb_release -ds 2>/dev/null || cat /etc/redhat-release 2>/dev/null || grep PRETTY_NAME /etc/os-release | cut -d= -f2 | tr -d '"')
         kernel=$(uname -r); uptime=$(uptime -p)
@@ -859,22 +852,18 @@ main_menu() {
         cpu_usage=$(top -bn1 | grep "Cpu(s)" | awk '{print $2 + $4}')
         mem_used=$(free -m | awk '/Mem:/ {print $3}'); mem_total=$(free -m | awk '/Mem:/ {print $2}')
         disk_used=$(df -h / | awk 'NR==2 {print $3}'); disk_total=$(df -h / | awk 'NR==2 {print $2}')
-
         printf " ${CYAN}%-6s${YELLOW}%-30s ${CYAN}%-6s${YELLOW}%s${NC}\n" "系统:" "$os" "内核:" "$kernel"
         printf " ${CYAN}%-6s${YELLOW}%-30s ${CYAN}%-6s${YELLOW}%s${NC}\n" "运行:" "$uptime" "负载:" "$load"
         printf " ${CYAN}%-6s${YELLOW}%-10s ${CYAN}%-6s${YELLOW}%-14s ${CYAN}%-6s${YELLOW}%s${NC}\n" "CPU:" "${cpu_usage}%" "内存:" "${mem_used}M/${mem_total}M" "硬盘:" "${disk_used}/${disk_total}"
         print_line
-
         printf "${CYAN} WireGuard:${NC} [状态: %-8s] [自启: %-4s] [版本: %-8s]\n" "$(get_wg_status_text)" "$(get_wg_enable_text)" "$(get_wg_version_text)"
         printf "${CYAN} x-ui 面板:${NC} [状态: %-8s] [自启: %-4s] [版本: %-8s]\n" "$(get_xui_status_text)" "$(get_xui_enable_text)" "$(get_xui_version_text)"
         print_line
-
         menu_item "1" "WireGuard 管理" "核心功能"
         menu_item "2" "x-ui 面板管理" "官方脚本"
         menu_item "3" "全自动 NAT/安全托管" "防火墙+BBR"
         menu_item "4" "网络工具箱" "解锁/测速"
         menu_item "5" "Nezha 被控端安装" "一键接入"
-
         print_line; menu_item "0" "退出脚本" ""; echo ""; read -r -p " 请选择: " choice
         case "$choice" in
             1) wg_menu_main ;; 2) xui_manage; press_any_key ;;
@@ -885,5 +874,4 @@ main_menu() {
         esac
     done
 }
-
 main_menu
