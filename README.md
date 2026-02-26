@@ -14,7 +14,13 @@
 
 ---
 
-## 版本说明
+## 📌 版本说明
+
+> [!IMPORTANT]
+> **当前 `main` 分支保持稳定版本：v56.7**
+> 
+> **最新开发版本 (v56.10) 已在 [`manus`](https://github.com/umut0301/auto-linux/tree/manus) 分支发布。**
+> 如果您需要体验最新的 WireGuard 接口管理、自定义 MTU 以及网段自动同步功能，请切换至 `manus` 分支。
 
 这个项目包含两个主要的脚本版本：
 
