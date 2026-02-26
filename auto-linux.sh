@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# auto-linux.sh (v56.8 网络军刀版)
+# auto-linux.sh (v56.9 网络军刀版)
 #
 # [核心变更]
 # 1. 紧急修复: 恢复 read_input 函数，修复 IP 段自动补全功能
@@ -9,6 +9,7 @@
 # 4. Menu 5 (Nezha): 新增 Nezha Agent 一键安装
 # 5. 严守红线: Menu 1/2/3 核心逻辑保持 v44.0 状态，绝对冻结
 # 6. WireGuard: 新增服务端和客户端自定义 MTU 功能
+# 7. WireGuard: 整合管理菜单，新增修改接口网段、MTU、重启接口功能
 #
 set -u
 IFS=$'\n\t'
@@ -825,14 +826,13 @@ wg_menu_main() {
         menu_item "2" "添加客户端" "批量/单个"
         menu_item "3" "列出客户端" "查看列表"
         menu_item "4" "查看配置/二维码" "手机扫码"
-        menu_item "5" "删除管理" "用户/接口"
-        menu_item "6" "修改端口" "自动同步"
+        menu_item "5" "接口管理" "删除/修改/重启"
         menu_item "7" "运行状态" "wg show"
         menu_item "8" "彻底卸载" "清除残留"
         print_line; menu_item "0" "返回主菜单" ""; echo ""; read -r -p " 请选择: " choice
         case "$choice" in
             1) create_server_logic ;; 2) add_client_menu ;; 3) local list; list=$([[ -d "$WG_CLIENT_DIR" ]] && find "$WG_CLIENT_DIR" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort | xargs); if [[ -z "$list" ]]; then echo "(暂无用户)"; else echo "$list" | tr ' ' '\n' | nl; fi; press_any_key ;;
-            4) view_client_logic ;; 5) del_menu_entry ;; 6) modify_port_logic ;; 7) show_status_logic ;; 8) uninstall_logic ;; 0) return ;; *) ;;
+            4) view_client_logic ;; 5) wg_management_menu ;; 7) show_status_logic ;; 8) uninstall_logic ;; 0) return ;; *) ;;
         esac
     done
 }
@@ -875,3 +875,109 @@ main_menu() {
     done
 }
 main_menu
+
+
+# 新增：修改接口MTU
+modify_interface_mtu_logic() {
+    local iface_list iface
+    iface_list=$(ls "$WG_DIR"/*.conf 2>/dev/null | xargs -n 1 basename -s .conf | xargs)
+    select_smart "修改MTU - 选择接口" "$iface_list" iface
+    if [[ -n "$iface" ]]; then
+        iface=$(trim "$iface")
+        local conf_file="$WG_DIR/${iface}.conf"
+        local old_mtu=$(read_conf_value "MTU" "$conf_file")
+        old_mtu=${old_mtu:-$DEFAULT_MTU}
+        local new_mtu
+        read_input "新MTU值" "$old_mtu" new_mtu
+        if [[ "$new_mtu" =~ ^[0-9]+$ ]]; then
+            log "停止服务..."
+            systemctl stop "wg-quick@$iface" 2>/dev/null; wg-quick down "$iface" 2>/dev/null
+            log "修改配置..."
+            sed -i "s/^MTU.*/MTU = $new_mtu/" "$conf_file"
+            log "启动服务..."
+            if systemctl start "wg-quick@$iface"; then log "成功！MTU更新为 $new_mtu"; else err "启动失败，请检查配置。"; fi
+        else
+            err "无效的MTU值"
+        fi
+    fi
+    press_any_key
+}
+
+# 新增：重启接口
+restart_interface_logic() {
+    local iface_list iface
+    iface_list=$(ls "$WG_DIR"/*.conf 2>/dev/null | xargs -n 1 basename -s .conf | xargs)
+    select_smart "重启接口 - 选择接口" "$iface_list" iface
+    if [[ -n "$iface" ]]; then
+        iface=$(trim "$iface")
+        log "正在重启 $iface ..."
+        if systemctl restart "wg-quick@$iface"; then
+            log "接口 $iface 重启成功！"
+        else
+            err "重启失败，尝试备用模式..."
+            wg-quick down "$iface" 2>/dev/null
+            wg-quick up "$iface" 2>/dev/null && log "备用模式重启成功"
+        fi
+    fi
+    press_any_key
+}
+
+# 新增：修改接口网段
+modify_interface_subnet_logic() {
+    local iface_list iface
+    iface_list=$(ls "$WG_DIR"/*.conf 2>/dev/null | xargs -n 1 basename -s .conf | xargs)
+    select_smart "修改网段 - 选择接口" "$iface_list" iface
+    if [[ -n "$iface" ]]; then
+        iface=$(trim "$iface")
+        local conf_file="$WG_DIR/${iface}.conf"
+        local old_addr=$(read_conf_value "Address" "$conf_file")
+        warn "警告：修改网段是一个危险操作！"
+        warn "这会导致所有现有客户端配置失效，您必须手动删除并重新添加所有客户端。"
+        warn "当前网段: $old_addr"
+        local new_subnet
+        read_input "请输入新的服务端内网IP段 (例如 10.0.2)" "" new_subnet
+        if [[ -z "$new_subnet" ]]; then err "输入不能为空"; press_any_key; return; fi
+        if [[ ! "$new_subnet" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then err "网段格式错误 (应为 x.x.x)"; press_any_key; return; fi
+        local confirm
+        read -r -p "确认要将网段从 $old_addr 修改为 ${new_subnet}.1/24 吗? (输入 yes 确认): " confirm
+        if [[ "$confirm" == "yes" ]]; then
+            log "停止服务..."
+            systemctl stop "wg-quick@$iface" 2>/dev/null; wg-quick down "$iface" 2>/dev/null
+            log "修改配置..."
+            sed -i "s|^Address.*|Address = ${new_subnet}.1/24|" "$conf_file"
+            log "启动服务..."
+            if systemctl start "wg-quick@$iface"; then
+                log "成功！网段已更新。"
+                warn "请务必删除并重新添加此接口下的所有客户端！"
+            else
+                err "启动失败，请检查配置。"
+            fi
+        else
+            log "操作已取消。"
+        fi
+    fi
+    press_any_key
+}
+
+# 新增：WireGuard 管理菜单
+wg_management_menu() {
+    while true; do
+        print_banner
+        echo -e "${BLUE}=== WireGuard 接口管理 ===${NC}"
+        menu_item "1" "删除管理" "客户端/接口"
+        menu_item "2" "修改端口" "自动同步"
+        menu_item "3" "修改接口网段" "危险操作"
+        menu_item "4" "修改接口MTU" ""
+        menu_item "5" "重启接口" ""
+        print_line; menu_item "0" "返回" ""; echo ""; read -r -p " 请选择: " choice
+        case "$choice" in
+            1) del_menu_entry ;;
+            2) modify_port_logic ;;
+            3) modify_interface_subnet_logic ;;
+            4) modify_interface_mtu_logic ;;
+            5) restart_interface_logic ;;
+            0) return ;;
+            *) ;;
+        esac
+    done
+}
