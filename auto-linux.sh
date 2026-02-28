@@ -453,9 +453,25 @@ modify_interface_mtu_logic() {
     old_mtu=${old_mtu:-$DEFAULT_MTU}
     read_input "新MTU值" "$old_mtu" new_mtu
     if [[ "$new_mtu" =~ ^[0-9]+$ ]]; then
-        systemctl stop "wg-quick@$f" 2>/dev/null; wg-quick down "$f" 2>/dev/null
-        grep -q "^MTU" "$conf" && sed -i "s/^MTU.*/MTU = $new_mtu/" "$conf" || sed -i "/\[Interface\]/a MTU = $new_mtu" "$conf"
-        systemctl start "wg-quick@$f" && log "成功" || err "失败"
+        log "正在停止接口 $f 并清理残留..."
+        systemctl stop "wg-quick@$f" 2>/dev/null
+        wg-quick down "$f" 2>/dev/null
+        ip link delete "$f" 2>/dev/null
+        
+        log "正在更新配置文件 MTU = $new_mtu..."
+        if grep -q "^MTU" "$conf"; then
+            sed -i "s/^MTU.*/MTU = $new_mtu/" "$conf"
+        else
+            sed -i "/\[Interface\]/a MTU = $new_mtu" "$conf"
+        fi
+        
+        log "正在重新启动接口 $f..."
+        systemctl daemon-reload
+        if systemctl start "wg-quick@$f" 2>/dev/null || wg-quick up "$f" 2>/dev/null; then
+            log "MTU 修改成功并已实时应用！"
+        else
+            err "接口启动失败，请检查配置"
+        fi
     fi; press_any_key
 }
 
@@ -507,10 +523,11 @@ modify_port_logic() {
     conf="$WG_DIR/${f}.conf"
     old_port=$(read_conf_value "ListenPort" "$conf")
     read_input "新端口" "$old_port" new_port
-    [[ "$new_port" =~ ^[0-9]+$ ]] && {
-        log "正在停止接口 $f..."
+    if [[ "$new_port" =~ ^[0-9]+$ ]]; then
+        log "正在停止接口 $f 并清理残留..."
         systemctl stop "wg-quick@$f" 2>/dev/null
         wg-quick down "$f" 2>/dev/null
+        ip link delete "$f" 2>/dev/null
         
         log "正在更新配置文件并开放端口 $new_port..."
         sed -i "s/^ListenPort.*/ListenPort = $new_port/" "$conf"
@@ -519,13 +536,11 @@ modify_port_logic() {
         log "正在重新启动接口 $f..."
         systemctl daemon-reload
         if systemctl start "wg-quick@$f" 2>/dev/null || wg-quick up "$f" 2>/dev/null; then
-            local wg_bin; wg_bin=$(find_wg_bin)
-            [[ -n "$wg_bin" ]] && "$wg_bin" set "$f" listen-port "$new_port" 2>/dev/null
             log "端口修改成功并已实时应用！"
         else
             err "接口启动失败，请检查配置"
         fi
-    }; press_any_key
+    fi; press_any_key
 }
 
 wg_menu_main() {
