@@ -8,7 +8,7 @@
 # 3. 紧急修复: 修复客户端名称正则校验，支持 g001 等合法名称
 # 4. 紧急修复: 修复 WG_CLIENT_DIR 目录自动创建逻辑，解决 find 报错
 # 5. 紧急修复: 修复 iptables 端口解析错误，确保 open_port 接收正确参数
-# 6. 紧急修复: 修复卸载后状态显示不实的问题
+# 6. 紧急修复: 修复卸载后状态显示不实的问题，增加彻底清理逻辑
 # 7. 严守红线: Menu 1/2/3 核心逻辑回归 v44.0 状态，绝对冻结
 # 8. WireGuard: 整合管理菜单，新增修改接口网段、MTU、重启接口功能
 #
@@ -63,7 +63,8 @@ read_input() {
         echo -e "${BLUE}[提示] 自动补全 IP: ${input}.1${NC}"
         input="${input}.1"
     fi
-    eval "$var_ref='\$input'"
+    # 使用 eval 赋值，确保变量被正确更新
+    eval "$var_ref=\"\$input\""
 }
 
 read_conf_value() {
@@ -82,10 +83,12 @@ create_shortcut() {
 
 select_smart() {
     local title="$1" list_str="$2" ret_var="$3"
-    local items=() old_ifs
-    old_ifs="$IFS"
+    local items=()
+    # 修复 IFS 处理，确保列表正确拆分
+    local old_ifs="$IFS"
     IFS=' ' read -r -a items <<< "$list_str"
     IFS="$old_ifs"
+    
     if [[ ${#items[@]} -eq 0 ]]; then
         echo " (无数据)"
         eval "$ret_var=''"
@@ -104,12 +107,12 @@ select_smart() {
     choice=$(trim "$choice")
     if [[ "$choice" =~ ^[0-9]+$ && "$choice" -ge 1 && "$choice" -le ${#items[@]} ]]; then
         local index=$((choice-1))
-        eval "$ret_var='\${items[\$index]}'"
+        eval "$ret_var=\"\${items[\$index]}\""
         return
     fi
     for item in "${items[@]}"; do
         if [[ "$item" == "$choice" ]]; then
-            eval "$ret_var='\$item'"
+            eval "$ret_var=\"\$item\""
             return
         fi
     done
@@ -396,7 +399,8 @@ core_delete_client() {
 add_single_client() {
     local iface="${1:-}" s_mtu="${2:-$DEFAULT_MTU}" name def_name=$(get_next_client_name)
     read_input "客户端名称" "$def_name" name
-    [[ ! "$name" =~ ^[A-Za-z0-9_-]+$ ]] && { err "非法名称"; press_any_key; return; }
+    # 修复名称校验逻辑，支持字母、数字、点、下划线、中划线
+    if [[ ! "$name" =~ ^[A-Za-z0-9._-]+$ ]]; then err "非法名称"; press_any_key; return; fi
     [[ -d "$WG_CLIENT_DIR/$name" ]] && { warn "用户已存在!"; press_any_key; return; }
     local set_ip; read_input "指定内网IP (留空自动分配)" "" set_ip
     [[ -n "$set_ip" && ! "$set_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && set_ip=""
@@ -430,7 +434,7 @@ add_client_menu() {
         select_smart "选择接口" "$iface_list" iface
         [[ -z "$iface" ]] && return
     fi
-    local f; f=$(trim "$iface")
+    local f="$iface"
     [[ -z "$s_mtu" ]] && { s_mtu=$(read_conf_value "MTU" "$WG_DIR/${f}.conf"); s_mtu=${s_mtu:-$DEFAULT_MTU}; }
     while true; do
         print_banner; echo -e "${BLUE}=== 添加客户端 ($f) ===${NC}"
@@ -459,7 +463,6 @@ modify_interface_mtu_logic() {
     ifs=$(ls "$WG_DIR"/*.conf 2>/dev/null | xargs -n 1 basename -s .conf | xargs)
     select_smart "修改MTU" "$ifs" f
     [[ -z "$f" ]] && return
-    f=$(trim "$f")
     conf="$WG_DIR/${f}.conf"
     old_mtu=$(read_conf_value "MTU" "$conf")
     old_mtu=${old_mtu:-$DEFAULT_MTU}
@@ -488,7 +491,6 @@ restart_interface_logic() {
     ifs=$(ls "$WG_DIR"/*.conf 2>/dev/null | xargs -n 1 basename -s .conf | xargs)
     select_smart "重启接口" "$ifs" f
     [[ -z "$f" ]] && return
-    f=$(trim "$f")
     systemctl restart "wg-quick@$f" && log "成功" || { wg-quick down "$f" 2>/dev/null; wg-quick up "$f" 2>/dev/null && log "成功"; }; press_any_key
 }
 
@@ -497,7 +499,6 @@ modify_interface_subnet_logic() {
     ifs=$(ls "$WG_DIR"/*.conf 2>/dev/null | xargs -n 1 basename -s .conf | xargs)
     select_smart "修改网段" "$ifs" f
     [[ -z "$f" ]] && return
-    f=$(trim "$f")
     conf="$WG_DIR/${f}.conf"
     old_addr=$(read_conf_value "Address" "$conf")
     old_prefix=$(echo "$old_addr" | cut -d"." -f1-3)
@@ -532,7 +533,6 @@ modify_port_logic() {
     ifs=$(ls "$WG_DIR"/*.conf 2>/dev/null | xargs -n 1 basename -s .conf | xargs)
     select_smart "修改端口" "$ifs" f
     [[ -z "$f" ]] && return
-    f=$(trim "$f")
     conf="$WG_DIR/${f}.conf"
     old_port=$(read_conf_value "ListenPort" "$conf")
     read_input "新端口" "$old_port" new_port
@@ -579,7 +579,20 @@ view_client_logic() {
 }
 
 auto_nat_firewall_logic() { log "正在配置 NAT/安全托管..."; press_any_key; }
-uninstall_wg() { warn "正在卸载 WireGuard..."; rm -rf "$WG_DIR"; log "卸载完成"; press_any_key; }
+
+uninstall_wg() {
+    warn "正在卸载 WireGuard..."
+    local ifs=$(ls "$WG_DIR"/*.conf 2>/dev/null | xargs -n 1 basename -s .conf | xargs)
+    for f in $ifs; do
+        systemctl stop "wg-quick@$f" 2>/dev/null
+        wg-quick down "$f" 2>/dev/null
+        ip link delete "$f" 2>/dev/null
+    done
+    rm -rf "$WG_DIR"
+    log "卸载完成"
+    press_any_key
+}
+
 xui_manage() { bash <(curl -fsSL https://raw.githubusercontent.com/yonggekkk/x-ui-yg/main/install.sh); }
 
 main_menu() {
