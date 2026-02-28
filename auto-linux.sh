@@ -443,8 +443,14 @@ del_client_menu() {
 }
 
 modify_interface_mtu_logic() {
-    local ifs=$(ls "$WG_DIR"/*.conf 2>/dev/null | xargs -n 1 basename -s .conf | xargs); select_smart "修改MTU" "$ifs" f; [[ -z "$f" ]] && return; f=$(trim "$f")
-    local conf old_mtu new_mtu; conf="$WG_DIR/${f:?}.conf"; old_mtu=$(read_conf_value "MTU" "$conf"); old_mtu=${old_mtu:-$DEFAULT_MTU}
+    local ifs f conf old_mtu new_mtu
+    ifs=$(ls "$WG_DIR"/*.conf 2>/dev/null | xargs -n 1 basename -s .conf | xargs)
+    select_smart "修改MTU" "$ifs" f
+    [[ -z "$f" ]] && return
+    f=$(trim "$f")
+    conf="$WG_DIR/${f}.conf"
+    old_mtu=$(read_conf_value "MTU" "$conf")
+    old_mtu=${old_mtu:-$DEFAULT_MTU}
     read_input "新MTU值" "$old_mtu" new_mtu
     if [[ "$new_mtu" =~ ^[0-9]+$ ]]; then
         systemctl stop "wg-quick@$f" 2>/dev/null; wg-quick down "$f" 2>/dev/null
@@ -459,8 +465,14 @@ restart_interface_logic() {
 }
 
 modify_interface_subnet_logic() {
-    local ifs=$(ls "$WG_DIR"/*.conf 2>/dev/null | xargs -n 1 basename -s .conf | xargs); select_smart "修改网段" "$ifs" f; [[ -z "$f" ]] && return; f=$(trim "$f")
-    local conf="$WG_DIR/${f:?}.conf" old_addr=$(read_conf_value "Address" "$conf") old_prefix=$(echo "$old_addr" | cut -d"." -f1-3) new_prefix
+    local ifs f conf old_addr old_prefix new_prefix confirm
+    ifs=$(ls "$WG_DIR"/*.conf 2>/dev/null | xargs -n 1 basename -s .conf | xargs)
+    select_smart "修改网段" "$ifs" f
+    [[ -z "$f" ]] && return
+    f=$(trim "$f")
+    conf="$WG_DIR/${f}.conf"
+    old_addr=$(read_conf_value "Address" "$conf")
+    old_prefix=$(echo "$old_addr" | cut -d"." -f1-3)
     read_input "新网段前缀 (x.x.x)" "$old_prefix" new_prefix
     [[ ! "$new_prefix" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && { err "格式错误"; press_any_key; return; }
     read -r -p "确认修改? (yes): " confirm; [[ "$confirm" != "yes" ]] && return
@@ -487,8 +499,13 @@ wg_management_menu() {
 }
 
 modify_port_logic() {
-    local ifs=$(ls "$WG_DIR"/*.conf 2>/dev/null | xargs -n 1 basename -s .conf | xargs); select_smart "修改端口" "$ifs" f; [[ -z "$f" ]] && return; f=$(trim "$f")
-    local conf old_port new_port; conf="$WG_DIR/${f:?}.conf"; old_port=$(read_conf_value "ListenPort" "$conf")
+    local ifs f conf old_port new_port
+    ifs=$(ls "$WG_DIR"/*.conf 2>/dev/null | xargs -n 1 basename -s .conf | xargs)
+    select_smart "修改端口" "$ifs" f
+    [[ -z "$f" ]] && return
+    f=$(trim "$f")
+    conf="$WG_DIR/${f}.conf"
+    old_port=$(read_conf_value "ListenPort" "$conf")
     read_input "新端口" "$old_port" new_port
     [[ "$new_port" =~ ^[0-9]+$ ]] && {
         systemctl stop "wg-quick@$f" 2>/dev/null; wg-quick down "$f" 2>/dev/null
@@ -505,7 +522,7 @@ wg_menu_main() {
         print_line; menu_item "0" "返回主菜单" ""; echo ""; read -r -p " 请选择: " sel
         case "$sel" in
             1) create_server_logic ;; 2) add_client_menu ;; 3) local list=$(find "$WG_CLIENT_DIR" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | xargs); echo "用户列表: $list"; press_any_key ;;
-            4) view_client_logic ;; 5) wg_management_menu ;; 7) "$(find_wg_bin)" show; press_any_key ;; 8) uninstall_wg ;; 0) return ;;
+            4) view_client_logic ;; 5) wg_management_menu ;; 7) local wg_bin; wg_bin=$(find_wg_bin); if [[ -n "$wg_bin" ]]; then "$wg_bin" show; else err "未找到 wg 命令"; fi; press_any_key ;; 8) uninstall_wg ;; 0) return ;;
         esac
     done
 }
