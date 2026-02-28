@@ -508,9 +508,23 @@ modify_port_logic() {
     old_port=$(read_conf_value "ListenPort" "$conf")
     read_input "新端口" "$old_port" new_port
     [[ "$new_port" =~ ^[0-9]+$ ]] && {
-        systemctl stop "wg-quick@$f" 2>/dev/null; wg-quick down "$f" 2>/dev/null
-        sed -i "s/^ListenPort.*/ListenPort = $new_port/" "$conf"; open_port "$new_port" "udp"
-        systemctl start "wg-quick@$f" && log "成功" || err "失败"
+        log "正在停止接口 $f..."
+        systemctl stop "wg-quick@$f" 2>/dev/null
+        wg-quick down "$f" 2>/dev/null
+        
+        log "正在更新配置文件并开放端口 $new_port..."
+        sed -i "s/^ListenPort.*/ListenPort = $new_port/" "$conf"
+        open_port "$new_port" "udp"
+        
+        log "正在重新启动接口 $f..."
+        systemctl daemon-reload
+        if systemctl start "wg-quick@$f" 2>/dev/null || wg-quick up "$f" 2>/dev/null; then
+            local wg_bin; wg_bin=$(find_wg_bin)
+            [[ -n "$wg_bin" ]] && "$wg_bin" set "$f" listen-port "$new_port" 2>/dev/null
+            log "端口修改成功并已实时应用！"
+        else
+            err "接口启动失败，请检查配置"
+        fi
     }; press_any_key
 }
 
