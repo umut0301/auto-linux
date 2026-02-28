@@ -287,11 +287,7 @@ open_port() {
 
 create_server_logic() {
     install_wg; mkdir -p "$WG_DIR"
-    local iface_list="" iface=""
-    local conf_files=( "$WG_DIR"/*.conf )
-    if [[ -e "${conf_files[0]}" ]]; then
-        iface_list=$(ls "$WG_DIR"/*.conf | xargs -n 1 basename -s .conf | xargs)
-    fi
+    local iface=""
     read_input "接口名称" "wg0" iface
     if [[ -f "$WG_DIR/${iface}.conf" ]]; then warn "接口已存在"; press_any_key; return; fi
     local priv pub port addr eth current_srv_mtu
@@ -405,7 +401,6 @@ core_delete_client() {
 add_single_client() {
     local iface="${1:-}" s_mtu="${2:-$DEFAULT_MTU}" name="" def_name=$(get_next_client_name)
     read_input "客户端名称" "$def_name" name
-    # 修复名称校验逻辑，支持字母、数字、点、下划线、中划线
     if [[ ! "$name" =~ ^[A-Za-z0-9._-]+$ ]]; then err "非法名称"; press_any_key; return; fi
     [[ -d "$WG_CLIENT_DIR/$name" ]] && { warn "用户已存在!"; press_any_key; return; }
     local set_ip=""; read_input "指定内网IP (留空自动分配)" "" set_ip
