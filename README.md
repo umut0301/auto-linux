@@ -70,7 +70,7 @@ chmod +x auto-linux-main.sh
     *   **✨ 新增**: WireGuard 接口管理菜单，整合删除、修改端口、修改网段、修改 MTU、重启接口功能。
     *   **✨ 新增**: WireGuard 服务端和客户端支持自定义 MTU 值。
     *   **🐞 修复**: 彻底修复了 850 行引号未闭合导致的语法错误及 UI 显示问题。
-    *   **🐞 修复**: 修复了 `add_client_menu` 等函数中变量未定义 (unbound variable) 导致的崩溃。
+    *   **🐞 修复**: 终极修复 `core_generate_client` 函数中 `c_priv` 等变量未定义 (unbound variable) 导致的崩溃，通过初始化所有 `local` 变量确保在 `set -u` 模式下的绝对稳定性。
     *   **🔧 优化**: 规范化代码逻辑，为核心管理函数添加详细注释。
 
 *   **v56.5 (2024-07-26)**
