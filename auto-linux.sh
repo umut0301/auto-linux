@@ -327,14 +327,14 @@ core_generate_client() {
         [[ -z "$new_ip" ]] && { err "IP池已满"; return 1; }
     fi
     mkdir -p "$WG_CLIENT_DIR/$name"
-    local c_priv c_pub c_psk s_pub s_port s_ip
+    local c_priv="" c_pub="" c_psk="" s_pub="" s_port="" s_ip="" s_priv=""
     c_priv=$(wg genkey)
     c_pub=$(echo "$c_priv" | wg pubkey)
     c_psk=$(wg genpsk)
     if [[ -f "$WG_DIR/${iface}_public.key" ]]; then
         s_pub=$(cat "$WG_DIR/${iface}_public.key")
     else
-        local s_priv=$(read_conf_value "PrivateKey" "$conf")
+        s_priv=$(read_conf_value "PrivateKey" "$conf")
         s_pub=$(echo "$s_priv" | wg pubkey)
     fi
     s_port=$(read_conf_value "ListenPort" "$conf")
