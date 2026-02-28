@@ -430,7 +430,7 @@ add_client_menu() {
         select_smart "选择接口" "$iface_list" iface
         [[ -z "$iface" ]] && return
     fi
-    f=$(trim "$iface")
+    local f; f=$(trim "$iface")
     [[ -z "$s_mtu" ]] && { s_mtu=$(read_conf_value "MTU" "$WG_DIR/${f}.conf"); s_mtu=${s_mtu:-$DEFAULT_MTU}; }
     while true; do
         print_banner; echo -e "${BLUE}=== 添加客户端 ($f) ===${NC}"
