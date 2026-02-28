@@ -3,14 +3,13 @@
 # auto-linux.sh (v56.10 网络军刀版)
 #
 # [核心变更]
-# 1. 紧急修复: 彻底重写 select_smart 函数，修复变量污染导致的 $input 错误
-# 2. 紧急修复: 修复 read_input 函数，确保 IP 段自动补全功能正常
-# 3. 紧急修复: 修复客户端名称正则校验，支持 g001 等合法名称
-# 4. 紧急修复: 修复 WG_CLIENT_DIR 目录自动创建逻辑，解决 find 报错
-# 5. 紧急修复: 修复 iptables 端口解析错误，确保 open_port 接收正确参数
-# 6. 紧急修复: 修复卸载后状态显示不实的问题，增加彻底清理逻辑
-# 7. 严守红线: Menu 1/2/3 核心逻辑回归 v44.0 状态，绝对冻结
-# 8. WireGuard: 整合管理菜单，新增修改接口网段、MTU、重启接口功能
+# 1. 紧急修复: 彻底重写 read_input 和 select_smart，废除 eval，解决变量污染
+# 2. 紧急修复: 修复客户端名称正则校验，支持 g001 等合法名称
+# 3. 紧急修复: 修复 WG_CLIENT_DIR 目录自动创建逻辑，解决 find 报错
+# 4. 紧急修复: 修复 iptables 端口解析错误，确保 open_port 接收正确参数
+# 5. 紧急修复: 修复卸载后状态显示不实的问题，增加彻底清理逻辑
+# 6. 严守红线: Menu 1/2/3 核心逻辑回归 v44.0 状态，绝对冻结
+# 7. WireGuard: 整合管理菜单，新增修改接口网段、MTU、重启接口功能
 #
 set -u
 IFS=$'\n\t'
@@ -50,8 +49,9 @@ trim() {
     echo -n "$var"
 }
 
+# 彻底重写 read_input，废除 eval，使用直接赋值
 read_input() {
-    local prompt="$1" default="$2" var_ref="$3" input
+    local prompt="$1" default="$2" var_name="$3" input
     if [[ -n "$default" ]]; then
         read -r -p "${prompt} [默认: ${default}]: " input
     else
@@ -59,12 +59,12 @@ read_input() {
     fi
     input=$(trim "${input:-$default}")
     # 特殊的 IP 补全逻辑
-    if [[ "$var_ref" == "addr" && "$input" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    if [[ "$var_name" == "addr" && "$input" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
         echo -e "${BLUE}[提示] 自动补全 IP: ${input}.1${NC}"
         input="${input}.1"
     fi
-    # 使用 eval 赋值，确保变量被正确更新
-    eval "$var_ref=\"\$input\""
+    # 直接通过变量名赋值
+    printf -v "$var_name" "%s" "$input"
 }
 
 read_conf_value() {
@@ -81,17 +81,17 @@ create_shortcut() {
     fi
 }
 
+# 彻底重写 select_smart，废除 eval，使用直接赋值
 select_smart() {
     local title="$1" list_str="$2" ret_var="$3"
     local items=()
-    # 修复 IFS 处理，确保列表正确拆分
     local old_ifs="$IFS"
     IFS=' ' read -r -a items <<< "$list_str"
     IFS="$old_ifs"
     
     if [[ ${#items[@]} -eq 0 ]]; then
         echo " (无数据)"
-        eval "$ret_var=''"
+        printf -v "$ret_var" "%s" ""
         return
     fi
     echo -e "${BLUE}--- $title ---${NC}"
@@ -107,17 +107,17 @@ select_smart() {
     choice=$(trim "$choice")
     if [[ "$choice" =~ ^[0-9]+$ && "$choice" -ge 1 && "$choice" -le ${#items[@]} ]]; then
         local index=$((choice-1))
-        eval "$ret_var=\"\${items[\$index]}\""
+        printf -v "$ret_var" "%s" "${items[$index]}"
         return
     fi
     for item in "${items[@]}"; do
         if [[ "$item" == "$choice" ]]; then
-            eval "$ret_var=\"\$item\""
+            printf -v "$ret_var" "%s" "$item"
             return
         fi
     done
     warn "无效的选择"
-    eval "$ret_var=''"
+    printf -v "$ret_var" "%s" ""
 }
 
 cleanup_temp_files() {
@@ -287,8 +287,11 @@ open_port() {
 
 create_server_logic() {
     install_wg; mkdir -p "$WG_DIR"
-    local iface_list iface
-    iface_list=$(ls "$WG_DIR"/*.conf 2>/dev/null | xargs -n 1 basename -s .conf | xargs)
+    local iface_list="" iface=""
+    local conf_files=( "$WG_DIR"/*.conf )
+    if [[ -e "${conf_files[0]}" ]]; then
+        iface_list=$(ls "$WG_DIR"/*.conf | xargs -n 1 basename -s .conf | xargs)
+    fi
     read_input "接口名称" "wg0" iface
     if [[ -f "$WG_DIR/${iface}.conf" ]]; then warn "接口已存在"; press_any_key; return; fi
     local priv pub port addr eth current_srv_mtu
@@ -392,17 +395,20 @@ EOF
 core_delete_client() {
     local name="${1:-}"
     rm -rf "${WG_CLIENT_DIR:?}/$name"
-    local ifaces=$(ls "$WG_DIR"/*.conf 2>/dev/null | xargs -n 1 basename -s .conf | xargs)
-    for iface in $ifaces; do rebuild_server_config "$iface"; done
+    local conf_files=( "$WG_DIR"/*.conf )
+    if [[ -e "${conf_files[0]}" ]]; then
+        local ifaces=$(ls "$WG_DIR"/*.conf | xargs -n 1 basename -s .conf | xargs)
+        for iface in $ifaces; do rebuild_server_config "$iface"; done
+    fi
 }
 
 add_single_client() {
-    local iface="${1:-}" s_mtu="${2:-$DEFAULT_MTU}" name def_name=$(get_next_client_name)
+    local iface="${1:-}" s_mtu="${2:-$DEFAULT_MTU}" name="" def_name=$(get_next_client_name)
     read_input "客户端名称" "$def_name" name
     # 修复名称校验逻辑，支持字母、数字、点、下划线、中划线
     if [[ ! "$name" =~ ^[A-Za-z0-9._-]+$ ]]; then err "非法名称"; press_any_key; return; fi
     [[ -d "$WG_CLIENT_DIR/$name" ]] && { warn "用户已存在!"; press_any_key; return; }
-    local set_ip; read_input "指定内网IP (留空自动分配)" "" set_ip
+    local set_ip=""; read_input "指定内网IP (留空自动分配)" "" set_ip
     [[ -n "$set_ip" && ! "$set_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && set_ip=""
     local res_ip=$(core_generate_client "$iface" "$name" "$set_ip" "$s_mtu")
     if [[ -n "$res_ip" ]]; then
@@ -415,8 +421,8 @@ add_single_client() {
 }
 
 add_batch_client() {
-    local iface="${1:-}" s_mtu="${2:-$DEFAULT_MTU}" count
-    read -r -p "请输入数量: " count
+    local iface="${1:-}" s_mtu="${2:-$DEFAULT_MTU}" count=""
+    read_input "请输入数量" "1" count
     [[ ! "$count" =~ ^[0-9]+$ ]] && { err "数量无效"; press_any_key; return; }
     for ((i=1; i<=count; i++)); do
         local name=$(get_next_client_name)
@@ -427,8 +433,11 @@ add_batch_client() {
 }
 
 add_client_menu() {
-    local iface="${1:-}" s_mtu="${2:-}" iface_list
-    iface_list=$(ls "$WG_DIR"/*.conf 2>/dev/null | xargs -n 1 basename -s .conf | xargs)
+    local iface="${1:-}" s_mtu="${2:-}" iface_list=""
+    local conf_files=( "$WG_DIR"/*.conf )
+    if [[ -e "${conf_files[0]}" ]]; then
+        iface_list=$(ls "$WG_DIR"/*.conf | xargs -n 1 basename -s .conf | xargs)
+    fi
     [[ -z "$iface_list" ]] && { err "请先安装服务端"; press_any_key; return; }
     if [[ -z "$iface" ]]; then
         select_smart "选择接口" "$iface_list" iface
@@ -450,17 +459,20 @@ del_client_menu() {
         menu_item "1" "单个删除" ""; menu_item "2" "批量删除" ""; menu_item "3" "重构配置" ""; print_line; menu_item "0" "返回" ""
         echo ""; read -r -p " 请选择: " sel
         case "$sel" in
-            1) local list; mkdir -p "$WG_CLIENT_DIR"; list=$(find "$WG_CLIENT_DIR" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | xargs); select_smart "选择删除" "$list" name; [[ -n "$name" ]] && core_delete_client "$name" ;;
-            2) read -r -p "起始编号: " s; read -r -p "数量: " c; for ((i=0; i<c; i++)); do printf -v t "client-%03d" $((s+i)); [[ -d "$WG_CLIENT_DIR/$t" ]] && rm -rf "${WG_CLIENT_DIR:?}/$t"; done; local ifs=$(ls "$WG_DIR"/*.conf 2>/dev/null | xargs -n 1 basename -s .conf | xargs); for f in $ifs; do rebuild_server_config "$f"; done ;;
-            3) local ifs=$(ls "$WG_DIR"/*.conf 2>/dev/null | xargs -n 1 basename -s .conf | xargs); select_smart "选择接口" "$ifs" f; [[ -n "$f" ]] && rebuild_server_config "$f" ;;
+            1) local list=""; mkdir -p "$WG_CLIENT_DIR"; list=$(find "$WG_CLIENT_DIR" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | xargs); select_smart "选择删除" "$list" name; [[ -n "$name" ]] && core_delete_client "$name" ;;
+            2) local s="" c=""; read_input "起始编号" "1" s; read_input "数量" "1" c; for ((i=0; i<c; i++)); do printf -v t "client-%03d" $((s+i)); [[ -d "$WG_CLIENT_DIR/$t" ]] && rm -rf "${WG_CLIENT_DIR:?}/$t"; done; local conf_files=( "$WG_DIR"/*.conf ); if [[ -e "${conf_files[0]}" ]]; then local ifs=$(ls "$WG_DIR"/*.conf | xargs -n 1 basename -s .conf | xargs); for f in $ifs; do rebuild_server_config "$f"; done; fi ;;
+            3) local ifs=""; local conf_files=( "$WG_DIR"/*.conf ); if [[ -e "${conf_files[0]}" ]]; then ifs=$(ls "$WG_DIR"/*.conf | xargs -n 1 basename -s .conf | xargs); fi; select_smart "选择接口" "$ifs" f; [[ -n "$f" ]] && rebuild_server_config "$f" ;;
             0) return ;;
         esac
     done
 }
 
 modify_interface_mtu_logic() {
-    local ifs f conf old_mtu new_mtu
-    ifs=$(ls "$WG_DIR"/*.conf 2>/dev/null | xargs -n 1 basename -s .conf | xargs)
+    local ifs="" f="" conf="" old_mtu="" new_mtu=""
+    local conf_files=( "$WG_DIR"/*.conf )
+    if [[ -e "${conf_files[0]}" ]]; then
+        ifs=$(ls "$WG_DIR"/*.conf | xargs -n 1 basename -s .conf | xargs)
+    fi
     select_smart "修改MTU" "$ifs" f
     [[ -z "$f" ]] && return
     conf="$WG_DIR/${f}.conf"
@@ -487,16 +499,22 @@ modify_interface_mtu_logic() {
 }
 
 restart_interface_logic() {
-    local ifs f
-    ifs=$(ls "$WG_DIR"/*.conf 2>/dev/null | xargs -n 1 basename -s .conf | xargs)
+    local ifs="" f=""
+    local conf_files=( "$WG_DIR"/*.conf )
+    if [[ -e "${conf_files[0]}" ]]; then
+        ifs=$(ls "$WG_DIR"/*.conf | xargs -n 1 basename -s .conf | xargs)
+    fi
     select_smart "重启接口" "$ifs" f
     [[ -z "$f" ]] && return
     systemctl restart "wg-quick@$f" && log "成功" || { wg-quick down "$f" 2>/dev/null; wg-quick up "$f" 2>/dev/null && log "成功"; }; press_any_key
 }
 
 modify_interface_subnet_logic() {
-    local ifs f conf old_addr old_prefix new_prefix confirm
-    ifs=$(ls "$WG_DIR"/*.conf 2>/dev/null | xargs -n 1 basename -s .conf | xargs)
+    local ifs="" f="" conf="" old_addr="" old_prefix="" new_prefix="" confirm=""
+    local conf_files=( "$WG_DIR"/*.conf )
+    if [[ -e "${conf_files[0]}" ]]; then
+        ifs=$(ls "$WG_DIR"/*.conf | xargs -n 1 basename -s .conf | xargs)
+    fi
     select_smart "修改网段" "$ifs" f
     [[ -z "$f" ]] && return
     conf="$WG_DIR/${f}.conf"
@@ -529,8 +547,11 @@ wg_management_menu() {
 }
 
 modify_port_logic() {
-    local ifs f conf old_port new_port
-    ifs=$(ls "$WG_DIR"/*.conf 2>/dev/null | xargs -n 1 basename -s .conf | xargs)
+    local ifs="" f="" conf="" old_port="" new_port=""
+    local conf_files=( "$WG_DIR"/*.conf )
+    if [[ -e "${conf_files[0]}" ]]; then
+        ifs=$(ls "$WG_DIR"/*.conf | xargs -n 1 basename -s .conf | xargs)
+    fi
     select_smart "修改端口" "$ifs" f
     [[ -z "$f" ]] && return
     conf="$WG_DIR/${f}.conf"
@@ -569,7 +590,7 @@ view_client_logic() {
     mkdir -p "$WG_CLIENT_DIR"
     local list=$(find "$WG_CLIENT_DIR" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | xargs)
     [[ -z "$list" ]] && { err "无客户端"; press_any_key; return; }
-    local name; select_smart "选择客户端" "$list" name
+    local name=""; select_smart "选择客户端" "$list" name
     [[ -z "$name" ]] && return
     local conf="$WG_CLIENT_DIR/$name/$name.conf"
     [[ ! -f "$conf" ]] && { err "配置丢失"; press_any_key; return; }
@@ -582,12 +603,23 @@ auto_nat_firewall_logic() { log "正在配置 NAT/安全托管..."; press_any_ke
 
 uninstall_wg() {
     warn "正在卸载 WireGuard..."
-    local ifs=$(ls "$WG_DIR"/*.conf 2>/dev/null | xargs -n 1 basename -s .conf | xargs)
-    for f in $ifs; do
-        systemctl stop "wg-quick@$f" 2>/dev/null
-        wg-quick down "$f" 2>/dev/null
-        ip link delete "$f" 2>/dev/null
-    done
+    local conf_files=( "$WG_DIR"/*.conf )
+    if [[ -e "${conf_files[0]}" ]]; then
+        local ifs=$(ls "$WG_DIR"/*.conf | xargs -n 1 basename -s .conf | xargs)
+        for f in $ifs; do
+            systemctl stop "wg-quick@$f" 2>/dev/null
+            wg-quick down "$f" 2>/dev/null
+            ip link delete "$f" 2>/dev/null
+        done
+    fi
+    # 彻底清理内核残留
+    if command -v wg >/dev/null 2>&1; then
+        local active_ifs=$(wg show interfaces)
+        for f in $active_ifs; do
+            wg-quick down "$f" 2>/dev/null
+            ip link delete "$f" 2>/dev/null
+        done
+    fi
     rm -rf "$WG_DIR"
     log "卸载完成"
     press_any_key
